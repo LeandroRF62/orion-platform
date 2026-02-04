@@ -201,6 +201,7 @@ modo_escala = st.sidebar.radio(
 )
 
 if modo_escala == "Relativa":
+
     usar_primeiro_valor = st.sidebar.checkbox(
         "Usar primeiro valor como zero",
         value=True
@@ -274,7 +275,41 @@ fig = px.line(
     template="plotly_white"
 )
 
-st.plotly_chart(fig, use_container_width=True)
+fig.update_layout(
+    height=780,
+    hovermode="closest",
+    legend=dict(
+        orientation="h",
+        y=-0.15,
+        x=0.5,
+        xanchor="center",
+        font=dict(size=17),
+        title_text=""
+    ),
+    dragmode="pan"
+)
+
+fig.update_xaxes(
+    tickfont=dict(size=17),
+    showspikes=True,
+    spikemode="across",
+    spikesnap="cursor"
+)
+
+fig.update_yaxes(
+    title_text=f"<b>{label_y}</b>",
+    title_font=dict(size=20),
+    tickfont=dict(size=17),
+    showspikes=True,
+    spikemode="across",
+    spikesnap="cursor"
+)
+
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={"editable": True, "scrollZoom": True}
+)
 
 # ===============================
 # MAPA
@@ -313,7 +348,11 @@ mapa.update_layout(
     margin=dict(l=0, r=0, t=0, b=0)
 )
 
-st.plotly_chart(mapa, use_container_width=True)
+st.plotly_chart(
+    mapa,
+    use_container_width=True,
+    config={"scrollZoom": True}
+)
 
 # ===============================
 # TABELA
