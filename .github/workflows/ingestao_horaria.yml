@@ -2,11 +2,15 @@ name: Ingestão Orion (1h)
 
 on:
   schedule:
-    - cron: "0 * * * *"   # a cada 1 hora
-  workflow_dispatch:     # permite rodar manualmente
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ingestao-orion
+  cancel-in-progress: true
 
 jobs:
-  ingestao:
+  ingestao_incremental:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,7 +25,7 @@ jobs:
       - name: Instalar dependências
         run: |
           python -m pip install --upgrade pip
-          pip install requests psycopg2-binary
+          pip install -r requirements.txt
 
       - name: Rodar ingestão
         env:
