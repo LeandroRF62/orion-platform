@@ -28,22 +28,19 @@ if not st.session_state.auth_ok:
     st.stop()
 
 # ===============================
-# LOAD ENV (LOCAL)
+# LOAD ENV
 # ===============================
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
-# ===============================
-# CONEXÃO BANCO
-# ===============================
 DATABASE_URL = os.getenv("DATABASE_URL")
+MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
+
 if not DATABASE_URL:
     st.error("DATABASE_URL não configurada")
     st.stop()
 
 engine = create_engine(DATABASE_URL)
-
-MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
 
 ARQUIVO_CACHE = "cache_orion_dev.csv"
 
@@ -74,17 +71,17 @@ if st.sidebar.button("🔄 Atualizar dados"):
     st.rerun()
 
 # ===============================
-# QUERY OTIMIZADA
+# QUERY BANCO
 # ===============================
 @st.cache_data(ttl=300)
 def carregar_dados_db():
 
     query = """
     SELECT 
-        l.data_leitura, 
-        l.valor_sensor, 
+        l.data_leitura,
+        l.valor_sensor,
         s.sensor_id,
-        s.tipo_sensor, 
+        s.tipo_sensor,
         d.device_name,
         d.latitude,
         d.longitude,
@@ -101,7 +98,7 @@ def carregar_dados_db():
     return pd.read_sql(query, engine)
 
 # ===============================
-# CARGA DADOS
+# CARGA
 # ===============================
 if modo_dev and os.path.exists(ARQUIVO_CACHE):
     df = pd.read_csv(ARQUIVO_CACHE)
@@ -113,7 +110,7 @@ df["data_leitura"] = pd.to_datetime(df["data_leitura"], errors="coerce").dt.tz_l
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
 if df.empty:
-    st.warning("Sem dados ainda.")
+    st.warning("Nenhum dado encontrado ainda.")
     st.stop()
 
 # ===============================
@@ -130,7 +127,6 @@ df_tipo = df[df["tipo_sensor"].isin(tipos_selecionados)]
 st.sidebar.subheader("📡 Status do Dispositivo")
 
 col1, col2 = st.sidebar.columns(2)
-
 with col1:
     filtro_online = st.checkbox("Online", value=True)
 with col2:
@@ -205,7 +201,6 @@ modo_escala = st.sidebar.radio(
 )
 
 if modo_escala == "Relativa":
-
     usar_primeiro_valor = st.sidebar.checkbox(
         "Usar primeiro valor como zero",
         value=True
@@ -220,19 +215,14 @@ if modo_escala == "Relativa":
     else:
         refs = {sid: 0 for sid in df_final["sensor_id"].unique()}
 
-    df_final["valor_grafico"] = (
-        df_final["valor_sensor"] -
-        df_final["sensor_id"].map(refs)
-    )
-
+    df_final["valor_grafico"] = df_final["valor_sensor"] - df_final["sensor_id"].map(refs)
     label_y = "Variação Relativa"
-
 else:
     df_final["valor_grafico"] = df_final["valor_sensor"]
     label_y = "Valor Absoluto"
 
 # ===============================
-# HEADER
+# HEADER DO DISPOSITIVO
 # ===============================
 info = df_final.sort_values("data_leitura").iloc[-1]
 
@@ -244,6 +234,32 @@ if pd.notna(ultima_tx):
     ultima_tx = (ultima_tx - pd.Timedelta(hours=3)).strftime("%d-%m-%Y %H:%M:%S")
 
 cor_status = "#22c55e" if status == "online" else "#ef4444"
+
+if bateria >= 75:
+    cor_bateria = "#22c55e"
+elif bateria >= 40:
+    cor_bateria = "#facc15"
+else:
+    cor_bateria = "#ef4444"
+
+if len(devices_selecionados) == 1:
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;gap:14px;padding:8px 0;">
+      <h3 style="margin:0;">{device_principal}</h3>
+      <span style="background:{cor_status};color:white;padding:4px 10px;border-radius:6px;">
+        {status.capitalize()}
+      </span>
+      <div style="display:flex;align-items:center;gap:6px;background:#f3f4f6;padding:4px 10px;border-radius:6px;">
+        <div style="width:28px;height:12px;border:2px solid #111;border-radius:3px;">
+          <div style="width:{bateria}%;height:100%;background:{cor_bateria};"></div>
+        </div>
+        <strong>{bateria}%</strong>
+      </div>
+      <span style="color:#f97316;">
+        ⏱ Última transmissão: {ultima_tx}
+      </span>
+    </div>
+    """, unsafe_allow_html=True)
 
 # ===============================
 # GRÁFICO
@@ -314,7 +330,7 @@ st.dataframe(
 )
 
 # ===============================
-# EXPORT CSV
+# EXPORTAÇÃO
 # ===============================
 csv = df_final.to_csv(index=False).encode("utf-8")
 st.download_button(
