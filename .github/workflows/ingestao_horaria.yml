@@ -1,0 +1,31 @@
+name: Ingestão Orion (1h)
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # a cada 1 hora
+  workflow_dispatch:     # permite rodar manualmente
+
+jobs:
+  ingestao:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests psycopg2-binary
+
+      - name: Rodar ingestão
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+        run: |
+          python ingestao/orion_ingest.py
