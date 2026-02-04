@@ -1,113 +1,241 @@
-from datetime import datetime, timedelta, timezone
+import os
+import requests
+import psycopg2
 from psycopg2.extras import execute_batch
+from datetime import datetime, timedelta, timezone
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import time
 
-from common import get_session, obter_token, get_db_conn, BASE_URL
+# ======================================================
+# CONFIGURAÇÕES GERAIS
+# ======================================================
+API_KEY = "QLClykq5tBlhO9ebP5PLDzKvYkyo2p3LlTVhqPxirRY="
+BASE_URL = "https://api.oriondata.io/api"
+
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # ======================================================
-# CONFIGURAÇÕES
+# CONTROLE DE MODO
 # ======================================================
-FOLGA_MINUTOS = 5
-SLEEP = 0.2
+MODO_HISTORICO = True
+DATA_INICIAL_HISTORICO = "2026-01-01T00:00:00"
+JANELA_HORAS = 1
+
+BACKFILL_EM_BLOCOS = True
+BLOCO_DIAS = 7
+
+REQUEST_TIMEOUT = 30
+SENSOR_BATCH_SIZE = 50
+SLEEP_BETWEEN_CALLS = 0.3
 
 # ======================================================
-# PIPELINE INCREMENTAL
+# SESSION COM RETRY
 # ======================================================
-def run_incremental():
-    session = get_session()
-    token = obter_token(session)
+session = requests.Session()
+retries = Retry(
+    total=5,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"]
+)
+adapter = HTTPAdapter(max_retries=retries)
+session.mount("https://", adapter)
+
+# ======================================================
+# TOKEN
+# ======================================================
+def obter_token():
+    r = session.get(
+        f"{BASE_URL}/token",
+        params={"apiKey": API_KEY},
+        timeout=REQUEST_TIMEOUT
+    )
+    r.raise_for_status()
+    return r.json()["token"]
+
+# ======================================================
+# DEVICES E SENSORES
+# ======================================================
+def cadastrar_devices_e_sensores(token, conn):
+
+    r = session.get(
+        f"{BASE_URL}/UserDevices",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=REQUEST_TIMEOUT
+    )
+    r.raise_for_status()
+
+    cur = conn.cursor()
+    sensor_ids = []
+
+    for device in r.json():
+
+        cur.execute("""
+            INSERT INTO devices (
+                device_id, device_name, serial_number, status,
+                latitude, longitude, last_upload, battery_percentage
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (device_id) DO UPDATE SET
+                device_name = EXCLUDED.device_name,
+                status = EXCLUDED.status,
+                latitude = EXCLUDED.latitude,
+                longitude = EXCLUDED.longitude,
+                last_upload = EXCLUDED.last_upload,
+                battery_percentage = EXCLUDED.battery_percentage;
+        """, (
+            device["deviceId"],
+            device["deviceName"],
+            device.get("serialNumber"),
+            device.get("status"),
+            device.get("latitude"),
+            device.get("longitude"),
+            device.get("lastUpload"),
+            device.get("batteryPercentage")
+        ))
+
+        for sensor in device.get("sensors", []):
+            sensor_ids.append(sensor["sensorId"])
+
+            cur.execute("""
+                INSERT INTO sensores (
+                    sensor_id, device_id, nome_customizado,
+                    tipo_sensor, unidade_medida
+                )
+                VALUES (%s,%s,%s,%s,%s)
+                ON CONFLICT (sensor_id) DO UPDATE SET
+                    device_id = EXCLUDED.device_id,
+                    nome_customizado = EXCLUDED.nome_customizado,
+                    tipo_sensor = EXCLUDED.tipo_sensor,
+                    unidade_medida = EXCLUDED.unidade_medida;
+            """, (
+                sensor["sensorId"],
+                device["deviceId"],
+                sensor.get("customName") or f"Sensor {sensor['sensorId']}",
+                sensor.get("sensorType"),
+                sensor.get("uom")
+            ))
+
+    conn.commit()
+    cur.close()
+
+    return sorted(set(sensor_ids))
+
+# ======================================================
+# GERADOR DE BLOCOS DE TEMPO
+# ======================================================
+def gerar_blocos_tempo(data_inicio_str, data_fim_dt, dias_bloco):
+
+    inicio = datetime.fromisoformat(
+        data_inicio_str.replace("Z", "")
+    ).replace(tzinfo=timezone.utc)
+
+    while inicio < data_fim_dt:
+        fim = min(inicio + timedelta(days=dias_bloco), data_fim_dt)
+        yield (
+            inicio.strftime("%Y-%m-%dT%H:%M:%S"),
+            fim.strftime("%Y-%m-%dT%H:%M:%S")
+        )
+        inicio = fim
+
+# ======================================================
+# JANELA TEMPO REAL
+# ======================================================
+def calcular_janela_tempo():
+    agora = datetime.now(timezone.utc)
+    data_fim = agora.strftime("%Y-%m-%dT%H:%M:%S")
+    data_inicio = (agora - timedelta(hours=JANELA_HORAS)).strftime("%Y-%m-%dT%H:%M:%S")
+    return data_inicio, data_fim
+
+# ======================================================
+# INGESTÃO PRINCIPAL
+# ======================================================
+def baixar_e_salvar_leituras(token, sensor_ids, conn):
+
     headers = {"Authorization": f"Bearer {token}"}
-
-    conn = get_db_conn()
     cur = conn.cursor()
 
-    # 🔑 sensores válidos + último dado ingerido
-    cur.execute("""
-        SELECT
-            s.sensor_id,
-            COALESCE(MAX(l.data_leitura), NOW() - INTERVAL '1 hour') AS last_ts
-        FROM sensores s
-        LEFT JOIN leituras l ON l.sensor_id = s.sensor_id
-        GROUP BY s.sensor_id
-        ORDER BY s.sensor_id
-    """)
-    sensores = cur.fetchall()
-
-    print(f"🔎 {len(sensores)} sensores para ingestão incremental")
-
-    erros = 0
-    inseridos = 0
-
-    # 🔑 agora COM timezone UTC
     agora = datetime.now(timezone.utc)
 
-    for sensor_id, last_ts in sensores:
-
-        # segurança: garantir timezone
-        if last_ts.tzinfo is None:
-            last_ts = last_ts.replace(tzinfo=timezone.utc)
-
-        # início = último dado - folga
-        start_dt = last_ts - timedelta(minutes=FOLGA_MINUTOS)
-
-        # fim = agora (UTC)
-        end_dt = agora
-
-        # proteção contra janela inválida
-        if start_dt >= end_dt:
-            continue
-
-        # API NÃO aceita timezone → formatar sem offset
-        start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%S")
-        end_str = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
-
-        print(f"➡ Sensor {sensor_id} | {start_str} → {end_str}")
-
-        r = session.get(
-            f"{BASE_URL}/SensorData",
-            headers=headers,
-            params={
-                "version": "1.3",
-                "startDate": start_str,
-                "endDate": end_str,
-                "sensorIds": str(sensor_id)
-            }
+    if MODO_HISTORICO and BACKFILL_EM_BLOCOS:
+        janelas = list(
+            gerar_blocos_tempo(DATA_INICIAL_HISTORICO, agora, BLOCO_DIAS)
         )
+    else:
+        janelas = [calcular_janela_tempo()]
 
-        if r.status_code != 200:
-            erros += 1
-            continue
+    print(f"🧱 Total de blocos: {len(janelas)}")
 
-        dados = r.json()
-        if not dados:
-            continue
+    for idx, (data_inicio, data_fim) in enumerate(janelas, start=1):
 
-        registros = [
-            (d["sensorId"], d["readingDate"], d["sensorValue"])
-            for d in dados
-        ]
+        print(f"\n🧱 Bloco {idx}/{len(janelas)} | {data_inicio} → {data_fim}")
 
-        execute_batch(cur, """
-            INSERT INTO leituras (
-                sensor_id,
-                data_leitura,
-                valor_sensor
-            )
-            VALUES (%s,%s,%s)
-            ON CONFLICT (sensor_id, data_leitura) DO NOTHING
-        """, registros, page_size=200)
+        for i in range(0, len(sensor_ids), SENSOR_BATCH_SIZE):
 
-        conn.commit()
-        inseridos += len(registros)
-        time.sleep(SLEEP)
+            lote = sensor_ids[i:i + SENSOR_BATCH_SIZE]
+            sensor_param = ",".join(map(str, lote))
+
+            offset = 0
+
+            while True:
+
+                r = session.get(
+                    f"{BASE_URL}/SensorData",
+                    headers=headers,
+                    params={
+                        "version": "1.3",
+                        "startDate": data_inicio,
+                        "endDate": data_fim,
+                        "offset": offset,
+                        "sensorIds": sensor_param
+                    },
+                    timeout=REQUEST_TIMEOUT
+                )
+
+                r.raise_for_status()
+                dados = r.json()
+
+                if not dados:
+                    break
+
+                registros = [
+                    (d["sensorId"], d["readingDate"], d["sensorValue"])
+                    for d in dados
+                ]
+
+                execute_batch(cur, """
+                    INSERT INTO leituras (
+                        sensor_id,
+                        data_leitura,
+                        valor_sensor
+                    )
+                    VALUES (%s,%s,%s)
+                    ON CONFLICT (sensor_id, data_leitura) DO NOTHING
+                """, registros, page_size=500)
+
+                conn.commit()
+
+                offset += 1
+                time.sleep(SLEEP_BETWEEN_CALLS)
 
     cur.close()
-    conn.close()
-
-    print(f"\n⚡ Ingestão concluída | Inseridos: {inseridos} | Erros API: {erros}")
 
 # ======================================================
 # MAIN
 # ======================================================
 if __name__ == "__main__":
-    run_incremental()
+
+    print("🚀 Iniciando sincronização")
+
+    conn = psycopg2.connect(DATABASE_URL)
+
+    token = obter_token()
+
+    sensor_ids = cadastrar_devices_e_sensores(token, conn)
+
+    baixar_e_salvar_leituras(token, sensor_ids, conn)
+
+    conn.close()
+
+    print("\n🏁 Processo finalizado com sucesso")
