@@ -28,4 +28,4 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           API_KEY: ${{ secrets.API_KEY }}
         run: |
-          python ingestao/orion_ingest.py
+          python ingestao/ingest_incremental.py
