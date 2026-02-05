@@ -25,8 +25,8 @@ def classificar_tarp(valor, limites):
 CORES_SENSOR = {
     "A-Axis Delta Angle": "#2563eb",   # Azul
     "B-Axis Delta Angle": "#f97316",   # Laranja
-    "Device Temperature": "#ef4444",   # Vermelho
-    "Air Temperature": "#a855f7"       # Roxo
+    "Device Temperature": "#a855f7",   # Vermelho
+    "Air Temperature": "#ef4444"       # Roxo
 }
 
 # ===============================
