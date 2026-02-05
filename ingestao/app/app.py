@@ -28,7 +28,7 @@ if not st.session_state.auth_ok:
     st.stop()
 
 # ===============================
-# LOAD ENV
+# ENV
 # ===============================
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
@@ -49,7 +49,6 @@ st.set_page_config(
 # ===============================
 @st.cache_data(ttl=300)
 def carregar_dados_db():
-
     query = """
     SELECT 
         l.data_leitura,
@@ -69,7 +68,6 @@ def carregar_dados_db():
     WHERE s.tipo_sensor IN ('A-Axis Delta Angle','B-Axis Delta Angle')
     ORDER BY l.data_leitura
     """
-
     return pd.read_sql(query, engine)
 
 df = carregar_dados_db()
@@ -78,9 +76,20 @@ df["data_leitura"] = pd.to_datetime(df["data_leitura"]).dt.tz_localize(None)
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
 # ===============================
-# FILTROS (IGUAL AO SEU)
+# FILTRO EIXO A/B/AMBOS (VOLTOU)
 # ===============================
-df_devices = df[["device_name","status"]].drop_duplicates()
+tipos_selecionados = st.sidebar.multiselect(
+    "Variável do Dispositivo",
+    sorted(df["tipo_sensor"].unique()),
+    default=sorted(df["tipo_sensor"].unique())
+)
+
+df_tipo = df[df["tipo_sensor"].isin(tipos_selecionados)]
+
+# ===============================
+# FILTRO DISPOSITIVOS
+# ===============================
+df_devices = df_tipo[["device_name","status"]].drop_duplicates()
 df_devices["status_lower"] = df_devices["status"].astype(str).str.lower()
 
 df_devices["status_str"] = df_devices["status_lower"].map({
@@ -109,10 +118,26 @@ devices_selecionados = list(dict.fromkeys(
     [device_principal]+[device_label_map[l] for l in outros_labels]
 ))
 
-df_final = df[df["device_name"].isin(devices_selecionados)].copy()
+df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
 
 # ===============================
-# 🚨 TARPs (NOVO BLOCO — NÃO QUEBRA NADA)
+# ORDEM CORRETA DOS EIXOS (A EM CIMA)
+# ===============================
+ordem_series = sorted(
+    df_final["tipo_sensor"].unique(),
+    key=lambda x: ("B" in x, x)
+)
+
+df_final["tipo_sensor"] = pd.Categorical(
+    df_final["tipo_sensor"],
+    categories=ordem_series,
+    ordered=True
+)
+
+df_final = df_final.sort_values(["tipo_sensor","data_leitura"])
+
+# ===============================
+# 🚨 TARPs
 # ===============================
 st.sidebar.markdown("### 🚨 Limites de Alerta")
 
@@ -135,26 +160,10 @@ tipos_ordenados = sorted(
     key=lambda x: ("A" not in x, x)
 )
 
-novo_alerta_tipo = st.sidebar.selectbox(
-    "Tipo de Sensor",
-    tipos_ordenados
-)
-
-novo_valor = st.sidebar.number_input(
-    "Valor do Limite",
-    value=0.0,
-    step=0.1
-)
-
-mostrar_linha = st.sidebar.checkbox(
-    "Mostrar linha tracejada no gráfico",
-    value=True
-)
-
-mensagem_alerta = st.sidebar.text_input(
-    "Mensagem do alerta",
-    value="Ex: Fazer inspeção"
-)
+novo_alerta_tipo = st.sidebar.selectbox("Tipo de Sensor",tipos_ordenados)
+novo_valor = st.sidebar.number_input("Valor do Limite",value=0.0,step=0.1)
+mostrar_linha = st.sidebar.checkbox("Mostrar linha tracejada no gráfico",value=True)
+mensagem_alerta = st.sidebar.text_input("Mensagem do alerta",value="Ex: Fazer inspeção")
 
 if st.sidebar.button("➕ Adicionar Alerta"):
 
@@ -174,7 +183,7 @@ if st.sidebar.button("➕ Adicionar Alerta"):
     st.sidebar.success("Alerta criado!")
 
 # ===============================
-# ZERO REFERÊNCIA (IGUAL AO SEU)
+# ZERO REFERÊNCIA
 # ===============================
 modo_escala = st.sidebar.radio(
     "Escala de Visualização",
@@ -204,7 +213,7 @@ else:
     label_y="Valor Absoluto"
 
 # ===============================
-# HEADER (VERSÃO MELHORADA)
+# HEADER
 # ===============================
 info = df_final.sort_values("data_leitura").iloc[-1]
 
@@ -221,7 +230,7 @@ st.markdown(f"""
 """)
 
 # ===============================
-# GRÁFICO (ORIGINAL + TARPs)
+# GRÁFICO
 # ===============================
 df_final["serie"]=df_final["device_name"]+" | "+df_final["tipo_sensor"]
 
@@ -233,7 +242,7 @@ fig=px.line(
     template="plotly_white"
 )
 
-# 🔴 LINHAS TARPs
+# 🔴 TARPs NO GRÁFICO
 if not limites_existentes.empty:
     for _,alerta in limites_existentes.iterrows():
         if alerta["mostrar_linha"]:
