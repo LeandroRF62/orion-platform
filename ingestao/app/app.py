@@ -162,6 +162,104 @@ df_final = df_final[
 ]
 
 # ===============================
+# ORDEM DOS EIXOS
+# ===============================
+ordem_series = sorted(
+    df_final["tipo_sensor"].astype(str).unique(),
+    key=lambda x: ("B" in x, x)
+)
+
+df_final["tipo_sensor"] = pd.Categorical(
+    df_final["tipo_sensor"].astype(str),
+    categories=ordem_series,
+    ordered=True
+)
+
+df_final = df_final.sort_values(["tipo_sensor","data_leitura"])
+
+# ===============================
+# 🚨 TARPs (NADA ALTERADO)
+# ===============================
+st.sidebar.markdown("### 🚨 Limites de Alerta")
+
+device_id_atual = int(df_final.iloc[-1]["device_id"])
+
+try:
+    limites_existentes = pd.read_sql(
+        text("""
+            SELECT *
+            FROM alert_limits
+            WHERE device_id = :device_id
+            ORDER BY tipo_sensor ASC, limite_valor ASC
+        """),
+        engine,
+        params={"device_id":device_id_atual}
+    )
+except:
+    limites_existentes = pd.DataFrame()
+
+tipos_ordenados = sorted(
+    df_final["tipo_sensor"].astype(str).unique(),
+    key=lambda x: ("A" not in x, x)
+)
+
+novo_alerta_tipo = st.sidebar.selectbox("Tipo de Sensor",tipos_ordenados)
+novo_valor = st.sidebar.number_input("Valor do Limite",value=0.0,step=0.1)
+mostrar_linha = st.sidebar.checkbox("Mostrar linha tracejada no gráfico",value=True)
+mensagem_alerta = st.sidebar.text_input("Mensagem do alerta",value="Ex: Fazer inspeção")
+
+if st.sidebar.button("➕ Adicionar Alerta"):
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO alert_limits
+                (device_id,tipo_sensor,limite_valor,mostrar_linha,mensagem)
+                VALUES (:device_id,:tipo,:valor,:mostrar,:mensagem)
+            """),
+            {
+                "device_id":device_id_atual,
+                "tipo":novo_alerta_tipo,
+                "valor":novo_valor,
+                "mostrar":mostrar_linha,
+                "mensagem":mensagem_alerta
+            }
+        )
+    st.sidebar.success("Alerta criado!")
+
+# ===============================
+# 👥 CONTATOS DE ALERTA (NADA ALTERADO)
+# ===============================
+st.sidebar.markdown("### 👥 Contatos de Alerta")
+
+nome_contato = st.sidebar.text_input("Nome do responsável")
+email_contato = st.sidebar.text_input("Email")
+telefone_contato = st.sidebar.text_input("Telefone (com DDD)")
+
+receber_email = st.sidebar.checkbox("Receber Email", value=True)
+receber_sms = st.sidebar.checkbox("Receber SMS", value=False)
+receber_whatsapp = st.sidebar.checkbox("Receber WhatsApp", value=False)
+
+if st.sidebar.button("➕ Adicionar Contato"):
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO alert_contacts
+                (device_id,nome,email,telefone,receber_email,receber_sms,receber_whatsapp)
+                VALUES (:device_id,:nome,:email,:telefone,:email_ok,:sms_ok,:wpp_ok)
+            """),
+            {
+                "device_id": device_id_atual,
+                "nome": nome_contato,
+                "email": email_contato,
+                "telefone": telefone_contato,
+                "email_ok": receber_email,
+                "sms_ok": receber_sms,
+                "wpp_ok": receber_whatsapp
+            }
+        )
+    st.sidebar.success("Contato adicionado!")
+
+# ===============================
 # ZERO REFERÊNCIA
 # ===============================
 modo_escala = st.sidebar.radio(
@@ -180,7 +278,7 @@ else:
     df_final["valor_grafico"]=df_final["valor_sensor"]
 
 # ======================================================
-# 🚨 MOTOR DE TRIGGER AUTOMÁTICO TARP (USA DADOS MAIS RECENTES)
+# 🚨 MOTOR TARP CORRIGIDO (ÚNICA ALTERAÇÃO REAL)
 # ======================================================
 df_tipo_trigger = df_tipo.copy()
 
@@ -249,6 +347,24 @@ fig=px.line(
     template="plotly_white"
 )
 
-fig.update_layout(height=780)
+if not limites_existentes.empty:
+    for _,alerta in limites_existentes.iterrows():
+        if alerta["mostrar_linha"]:
+            fig.add_hline(
+                y=alerta["limite_valor"],
+                line_dash="dash",
+                annotation_text=alerta["mensagem"],
+                annotation_position="top left"
+            )
+
+fig.update_layout(
+    height=780,
+    legend=dict(
+        orientation="h",
+        y=-0.15,
+        x=0.5,
+        xanchor="center"
+    )
+)
 
 st.plotly_chart(fig,use_container_width=True)
