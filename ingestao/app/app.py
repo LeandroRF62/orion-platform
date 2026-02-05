@@ -58,6 +58,14 @@ st.set_page_config(
 )
 
 # ===============================
+# 🔄 BOTÃO ATUALIZAR DADOS
+# ===============================
+if st.sidebar.button("🔄 Atualizar Dados"):
+    st.cache_data.clear()
+    st.rerun()
+
+
+# ===============================
 # QUERY BANCO
 # ===============================
 @st.cache_data(ttl=300)
