@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 # ======================================================
-# AUTENTICAÇÃO (PRIMEIRA COISA DO APP)
+# AUTENTICAÇÃO
 # ======================================================
 APP_PASSWORD = os.getenv("APP_PASSWORD", "orion123")
 
@@ -30,27 +30,29 @@ if not st.session_state.auth_ok:
     st.stop()
 
 # ======================================================
-# LOAD ENV (apenas local — ignorado na cloud)
+# LOAD ENV
 # ======================================================
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 # ======================================================
-# CONEXÃO COM BANCO
+# CONEXÃO COM BANCO (🔥 melhoria estabilidade cloud)
 # ======================================================
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     st.error("DATABASE_URL não configurada")
     st.stop()
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300
+)
 
 # ======================================================
 # MAPBOX TOKEN
 # ======================================================
 MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
-if not MAPBOX_TOKEN:
-    st.warning("MAPBOX_TOKEN não configurado (mapa pode não aparecer)")
 
 # ======================================================
 # CONFIG STREAMLIT
@@ -83,38 +85,38 @@ if st.sidebar.button("🔄 Atualizar dados"):
     st.rerun()
 
 # ======================================================
-# QUERY OTIMIZADA (🔥 MELHORIA IMPORTANTE)
+# QUERY OTIMIZADA PROFISSIONAL (🔥)
 # ======================================================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def carregar_dados_db():
     query = """
     SELECT 
-        l.data_leitura,
+        l.data_leitura AT TIME ZONE 'UTC' AS data_leitura,
         l.valor_sensor,
         s.sensor_id,
         s.tipo_sensor,
         d.device_name,
         d.latitude,
         d.longitude,
-        d.status,
+        LOWER(d.status) AS status,
         d.battery_percent,
-        d.last_upload
+        d.last_upload AT TIME ZONE 'UTC' AS last_upload
     FROM leituras l
     JOIN sensores s ON l.sensor_id = s.sensor_id
     JOIN devices d ON s.device_id = d.device_id
     WHERE
         s.tipo_sensor IN ('A-Axis Delta Angle','B-Axis Delta Angle')
         AND l.data_leitura >= NOW() - INTERVAL '30 days'
-    ORDER BY l.data_leitura
+    ORDER BY l.data_leitura ASC
     """
-    return pd.read_sql(query, engine)
+    return pd.read_sql_query(query, engine)
 
 df = carregar_dados_db()
 
 # ======================================================
-# NORMALIZAÇÃO
+# NORMALIZAÇÃO (🔥 menos processamento)
 # ======================================================
-df['data_leitura'] = pd.to_datetime(df['data_leitura'], errors='coerce').dt.tz_localize(None)
+df['data_leitura'] = pd.to_datetime(df['data_leitura'], errors='coerce')
 
 if 'last_upload' in df.columns:
     df['last_upload'] = pd.to_datetime(df['last_upload'], errors='coerce')
@@ -149,12 +151,11 @@ if filtro_offline:
     status_permitidos.append("offline")
 
 df_devices = df[['device_name','status']].drop_duplicates()
-df_devices['status_lower'] = df_devices['status'].astype(str).str.lower()
 
 if status_permitidos:
-    df_devices = df_devices[df_devices['status_lower'].isin(status_permitidos)]
+    df_devices = df_devices[df_devices['status'].isin(status_permitidos)]
 
-df_devices['status_str'] = df_devices['status_lower'].map({
+df_devices['status_str'] = df_devices['status'].map({
     'online':'🟢 Online',
     'offline':'🔴 Offline'
 }).fillna('⚪ Desconhecido')
@@ -269,7 +270,7 @@ df_mapa = (
     .dropna(subset=['latitude','longitude'])
 )
 
-df_mapa['cor'] = df_mapa['status'].astype(str).str.lower().apply(
+df_mapa['cor'] = df_mapa['status'].apply(
     lambda x:"#6ee7b7" if x=="online" else "#ef4444"
 )
 
