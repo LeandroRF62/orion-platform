@@ -238,8 +238,9 @@ if len(devices_selecionados) == 1:
             </span>
         </div>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True   # 👈 ESSENCIAL
     )
+
 
 # ===============================
 # GRÁFICO
