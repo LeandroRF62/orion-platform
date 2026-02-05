@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import os
 from dotenv import load_dotenv
 from pathlib import Path
@@ -72,19 +72,23 @@ def carregar_dados_db():
 
 df = carregar_dados_db()
 
+if df.empty:
+    st.warning("Sem dados ainda.")
+    st.stop()
+
 df["data_leitura"] = pd.to_datetime(df["data_leitura"]).dt.tz_localize(None)
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
 # ===============================
-# FILTRO EIXO A/B/AMBOS (VOLTOU)
+# FILTRO EIXO A/B/AMBOS
 # ===============================
 tipos_selecionados = st.sidebar.multiselect(
     "Variável do Dispositivo",
-    sorted(df["tipo_sensor"].unique()),
-    default=sorted(df["tipo_sensor"].unique())
+    sorted(df["tipo_sensor"].astype(str).unique()),
+    default=sorted(df["tipo_sensor"].astype(str).unique())
 )
 
-df_tipo = df[df["tipo_sensor"].isin(tipos_selecionados)]
+df_tipo = df[df["tipo_sensor"].astype(str).isin(tipos_selecionados)]
 
 # ===============================
 # FILTRO DISPOSITIVOS
@@ -121,15 +125,32 @@ devices_selecionados = list(dict.fromkeys(
 df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
 
 # ===============================
-# ORDEM CORRETA DOS EIXOS (A EM CIMA)
+# 📅 FILTRO DE PERÍODO (RESTAURADO)
+# ===============================
+st.sidebar.subheader("📅 Período de Análise")
+
+data_min = df_final["data_leitura"].min().date()
+data_max = df_final["data_leitura"].max().date()
+
+c1, c2 = st.sidebar.columns(2)
+data_ini = c1.date_input("Data inicial", data_min)
+data_fim = c2.date_input("Data final", data_max)
+
+df_final = df_final[
+    (df_final["data_leitura"] >= pd.to_datetime(data_ini)) &
+    (df_final["data_leitura"] < pd.to_datetime(data_fim) + pd.Timedelta(days=1))
+]
+
+# ===============================
+# ORDEM CORRETA DOS EIXOS
 # ===============================
 ordem_series = sorted(
-    df_final["tipo_sensor"].unique(),
+    df_final["tipo_sensor"].astype(str).unique(),
     key=lambda x: ("B" in x, x)
 )
 
 df_final["tipo_sensor"] = pd.Categorical(
-    df_final["tipo_sensor"],
+    df_final["tipo_sensor"].astype(str),
     categories=ordem_series,
     ordered=True
 )
@@ -141,22 +162,24 @@ df_final = df_final.sort_values(["tipo_sensor","data_leitura"])
 # ===============================
 st.sidebar.markdown("### 🚨 Limites de Alerta")
 
-device_id_atual = df_final.iloc[-1]["device_id"]
-
-query_limites = f"""
-SELECT *
-FROM alert_limits
-WHERE device_id = {device_id_atual}
-ORDER BY tipo_sensor ASC, limite_valor ASC
-"""
+device_id_atual = int(df_final.iloc[-1]["device_id"])
 
 try:
-    limites_existentes = pd.read_sql(query_limites, engine)
+    limites_existentes = pd.read_sql(
+        text("""
+            SELECT *
+            FROM alert_limits
+            WHERE device_id = :device_id
+            ORDER BY tipo_sensor ASC, limite_valor ASC
+        """),
+        engine,
+        params={"device_id":device_id_atual}
+    )
 except:
     limites_existentes = pd.DataFrame()
 
 tipos_ordenados = sorted(
-    df_final["tipo_sensor"].unique(),
+    df_final["tipo_sensor"].astype(str).unique(),
     key=lambda x: ("A" not in x, x)
 )
 
@@ -168,17 +191,20 @@ mensagem_alerta = st.sidebar.text_input("Mensagem do alerta",value="Ex: Fazer in
 if st.sidebar.button("➕ Adicionar Alerta"):
 
     with engine.begin() as conn:
-        conn.execute(f"""
-            INSERT INTO alert_limits
-            (device_id,tipo_sensor,limite_valor,mostrar_linha,mensagem)
-            VALUES (
-                {device_id_atual},
-                '{novo_alerta_tipo}',
-                {novo_valor},
-                {mostrar_linha},
-                '{mensagem_alerta}'
-            )
-        """)
+        conn.execute(
+            text("""
+                INSERT INTO alert_limits
+                (device_id,tipo_sensor,limite_valor,mostrar_linha,mensagem)
+                VALUES (:device_id,:tipo,:valor,:mostrar,:mensagem)
+            """),
+            {
+                "device_id":device_id_atual,
+                "tipo":novo_alerta_tipo,
+                "valor":novo_valor,
+                "mostrar":mostrar_linha,
+                "mensagem":mensagem_alerta
+            }
+        )
 
     st.sidebar.success("Alerta criado!")
 
@@ -232,7 +258,7 @@ st.markdown(f"""
 # ===============================
 # GRÁFICO
 # ===============================
-df_final["serie"]=df_final["device_name"]+" | "+df_final["tipo_sensor"].astype(str)
+df_final["serie"]=df_final["device_name"].astype(str)+" | "+df_final["tipo_sensor"].astype(str)
 
 fig=px.line(
     df_final,
@@ -242,7 +268,6 @@ fig=px.line(
     template="plotly_white"
 )
 
-# 🔴 TARPs NO GRÁFICO
 if not limites_existentes.empty:
     for _,alerta in limites_existentes.iterrows():
         if alerta["mostrar_linha"]:
