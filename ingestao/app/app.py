@@ -58,6 +58,13 @@ st.set_page_config(
 )
 
 # ===============================
+# 🔄 BOTÃO ATUALIZAR DADOS
+# ===============================
+if st.sidebar.button("🔄 Atualizar Dados"):
+    st.cache_data.clear()
+    st.rerun()
+
+# ===============================
 # QUERY BANCO
 # ===============================
 @st.cache_data(ttl=300)
@@ -261,23 +268,42 @@ modo_escala = st.sidebar.radio(
 )
 
 if modo_escala=="Relativa":
-    usar_primeiro_valor = st.sidebar.checkbox(
-        "Usar primeiro valor como zero",
-        value=True
+    refs = (
+        df_final.sort_values("data_leitura")
+        .groupby("sensor_id")["valor_sensor"]
+        .first()
     )
-
-    if usar_primeiro_valor:
-        refs = (
-            df_final.sort_values("data_leitura")
-            .groupby("sensor_id")["valor_sensor"]
-            .first()
-        )
-    else:
-        refs = {sid:0 for sid in df_final["sensor_id"].unique()}
-
     df_final["valor_grafico"]=df_final["valor_sensor"]-df_final["sensor_id"].map(refs)
 else:
     df_final["valor_grafico"]=df_final["valor_sensor"]
+
+# ======================================================
+# 🚨 MOTOR DE TRIGGER AUTOMÁTICO TARP
+# ======================================================
+ultimo_por_sensor = (
+    df_final.sort_values("data_leitura")
+    .groupby(["tipo_sensor"])
+    .last()
+    .reset_index()
+)
+
+maior_valor_atual = ultimo_por_sensor["valor_grafico"].abs().max()
+
+limites_tarp = {
+    "verde": 0,
+    "amarelo": 5,
+    "laranja": 10,
+    "vermelho": 20
+}
+
+nivel_tarp = classificar_tarp(abs(maior_valor_atual), limites_tarp)
+
+emoji_tarp = {
+    "Verde": "🟢",
+    "Amarelo": "🟡",
+    "Laranja": "🟠",
+    "Vermelho": "🔴"
+}.get(nivel_tarp, "⚪")
 
 # ===============================
 # HEADER
@@ -293,7 +319,7 @@ if pd.notna(ultima_tx):
 
 st.markdown(f"""
 ### {device_principal}
-🟢 Status: {status.upper()} | 🔋 {bateria}% | ⏱ Última transmissão: {ultima_tx}
+{emoji_tarp} TARP: {nivel_tarp} | 🟢 Status: {status.upper()} | 🔋 {bateria}% | ⏱ Última transmissão: {ultima_tx}
 """)
 
 # ===============================
