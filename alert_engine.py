@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 import os
 
 # ======================================================
-# CONFIG
+# CONFIGU
 # ======================================================
 DATABASE_URL = os.getenv("DATABASE_URL")
 
