@@ -181,19 +181,35 @@ if modo_escala=="Relativa (primeiro valor = zero)":
     df_final["valor_grafico"]=df_final["valor_sensor"]-df_final["sensor_id"].map(refs)
 
 elif modo_escala=="Relativa manual":
-    sensores_lista=sorted(df_final["sensor_id"].unique())
+
     referencia_manual={}
-    for sid in sensores_lista:
+
+    sensores_unicos = (
+        df_final[["sensor_id","device_name","tipo_sensor"]]
+        .drop_duplicates()
+        .sort_values(["device_name","tipo_sensor"])
+    )
+
+    for _,row in sensores_unicos.iterrows():
+
+        sid=row["sensor_id"]
+        device=row["device_name"]
+        eixo=row["tipo_sensor"]
+
+        label=f"Ref – {device} | {eixo}"
+
         referencia_manual[sid]=st.sidebar.number_input(
-            f"Ref Sensor {sid}",
+            label,
             value=0.0,
             step=0.01,
             key=f"ref_{sid}"
         )
+
     df_final["valor_grafico"]=df_final.apply(
-        lambda row: row["valor_sensor"]-referencia_manual.get(row["sensor_id"],0),
+        lambda r: r["valor_sensor"]-referencia_manual.get(r["sensor_id"],0),
         axis=1
     )
+
 
 # ======================================================
 # HEADER
