@@ -235,6 +235,21 @@ fig.update_layout(
     )
 )
 
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={
+        "scrollZoom": True,
+        "doubleClick": "reset",
+        "displaylogo": False,
+        "modeBarButtonsToRemove": [
+            "select2d",
+            "lasso2d"
+        ]
+    }
+)
+
+
 
 # ======================================================
 # 🛰️ MAPA
