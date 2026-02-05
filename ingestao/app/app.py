@@ -301,8 +301,30 @@ if pd.notna(ultima_tx):
 
 st.markdown(f"""
 ### {device_principal}
-🟢 Status: {status.upper()} | 🔋 {bateria}% | ⏱ Última transmissão: {ultima_tx}
+{emoji_tarp} TARP: {nivel_tarp} | 🔋 {bateria}% | ⏱ Última transmissão: {ultima_tx}
 """)
+
+
+# ===============================
+# 🚨 STATUS DINÂMICO TARP (NOVO)
+# ===============================
+# limites exemplo (vamos depois puxar do banco)
+limites_tarp = {
+    "verde": 0,
+    "amarelo": 5,
+    "laranja": 10,
+    "vermelho": 20
+}
+
+nivel_tarp = classificar_tarp(abs(maior_valor_atual), limites_tarp)
+
+emoji_tarp = {
+    "Verde": "🟢",
+    "Amarelo": "🟡",
+    "Laranja": "🟠",
+    "Vermelho": "🔴"
+}.get(nivel_tarp, "⚪")
+
 
 # ===============================
 # 🚨 DETECÇÃO AUTOMÁTICA DO TARP (NOVO)
