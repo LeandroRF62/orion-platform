@@ -183,7 +183,6 @@ if modo_escala=="Relativa (primeiro valor = zero)":
 elif modo_escala=="Relativa manual":
 
     referencia_manual={}
-
     sensores_unicos = (
         df_final[["sensor_id","device_name","tipo_sensor"]]
         .drop_duplicates()
@@ -191,25 +190,19 @@ elif modo_escala=="Relativa manual":
     )
 
     for _,row in sensores_unicos.iterrows():
-
         sid=row["sensor_id"]
         device=row["device_name"]
         eixo=row["tipo_sensor"]
-
         label=f"Ref – {device} | {eixo}"
 
         referencia_manual[sid]=st.sidebar.number_input(
-            label,
-            value=0.0,
-            step=0.01,
-            key=f"ref_{sid}"
+            label,value=0.0,step=0.01,key=f"ref_{sid}"
         )
 
     df_final["valor_grafico"]=df_final.apply(
         lambda r: r["valor_sensor"]-referencia_manual.get(r["sensor_id"],0),
         axis=1
     )
-
 
 # ======================================================
 # HEADER
@@ -241,20 +234,30 @@ fig=px.line(
     template="plotly_white"
 )
 
+# 🔥 LABEL DINÂMICO Y
+if modo_escala=="Absoluta":
+    label_y="Valor Absoluto"
+else:
+    label_y="Δ Valor Relativo"
+
+fig.update_xaxes(title_text="")
+fig.update_yaxes(title_text=f"<b>{label_y}</b>")
+
 fig.update_layout(
     height=780,
     legend=dict(
         orientation="h",
         y=-0.15,
         x=0.5,
-        xanchor="center"
+        xanchor="center",
+        title_text=""
     )
 )
 
 st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True})
 
 # ======================================================
-# 🛰️ MAPA RESTAURADO
+# 🛰️ MAPA
 # ======================================================
 st.subheader("🛰️ Localização dos Dispositivos")
 
