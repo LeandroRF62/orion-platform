@@ -249,16 +249,36 @@ df_final["serie"] = df_final["device_name"].astype(str) + " | " + df_final["tipo
 
 fig = go.Figure()
 
-devices_unicos = sorted(df_final["device_name"].unique())
+devices_unicos = list(dict.fromkeys(df_final["device_name"].tolist()))
 device_index = {d: i for i, d in enumerate(devices_unicos)}
 
-def ajustar_cor_hex(hex_color, fator):
-    hex_color = hex_color.lstrip("#")
-    r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-    r = min(255, max(0, int(r * fator)))
-    g = min(255, max(0, int(g * fator)))
-    b = min(255, max(0, int(b * fator)))
-    return f"#{r:02x}{g:02x}{b:02x}"
+# 🎨 Paleta profissional por DEVICE
+PALETA_DEVICES = [
+    {
+        "A-Axis Delta Angle": "#2563eb",   # azul
+        "B-Axis Delta Angle": "#f97316",   # laranja
+        "Device Temperature": "#a855f7",
+        "Air Temperature": "#ef4444"
+    },
+    {
+        "A-Axis Delta Angle": "#10b981",   # verde
+        "B-Axis Delta Angle": "#ec4899",   # rosa
+        "Device Temperature": "#6366f1",
+        "Air Temperature": "#ef4444"
+    },
+    {
+        "A-Axis Delta Angle": "#06b6d4",   # ciano
+        "B-Axis Delta Angle": "#eab308",   # amarelo
+        "Device Temperature": "#a855f7",
+        "Air Temperature": "#ef4444"
+    },
+    {
+        "A-Axis Delta Angle": "#8b5cf6",   # roxo
+        "B-Axis Delta Angle": "#ef4444",   # vermelho
+        "Device Temperature": "#a855f7",
+        "Air Temperature": "#ef4444"
+    }
+]
 
 for serie in df_final["serie"].unique():
 
@@ -268,11 +288,10 @@ for serie in df_final["serie"].unique():
 
     eixo_secundario = tipo in ["Device Temperature", "Air Temperature"]
 
-    cor_base = CORES_SENSOR.get(tipo, "#000000")
-
     idx = device_index.get(device, 0)
-    fator = 1 + (idx * 0.25)
-    cor_final = ajustar_cor_hex(cor_base, fator)
+    paleta = PALETA_DEVICES[idx % len(PALETA_DEVICES)]
+
+    cor_final = paleta.get(tipo, CORES_SENSOR.get(tipo, "#000000"))
 
     fig.add_trace(go.Scatter(
         x=d["data_leitura"],
@@ -289,6 +308,7 @@ for serie in df_final["serie"].unique():
         "%{fullData.name}<br>" +
         "Valor: %{y:.4f}<extra></extra>"
     ))
+
 
 label_y = "Valor Absoluto" if modo_escala == "Absoluta" else "Δ Valor Relativo"
 
