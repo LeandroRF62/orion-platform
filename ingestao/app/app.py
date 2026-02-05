@@ -176,9 +176,9 @@ if modo_escala=="Relativa":
 else:
     df_final["valor_grafico"]=df_final["valor_sensor"]
 
-# ===============================
-# 🚨 DETECÇÃO AUTOMÁTICA DO TARP
-# ===============================
+# ======================================================
+# 🚨 DETECÇÃO AUTOMÁTICA DO TARP (SÓ ADICIONADO AQUI)
+# ======================================================
 ultimo_por_sensor = (
     df_final.sort_values("data_leitura")
     .groupby(["tipo_sensor"])
