@@ -86,13 +86,12 @@ if st.sidebar.button("🔄 Atualizar dados"):
 # ======================================================
 @st.cache_data(ttl=300)
 def carregar_dados_db():
-
     query = """
     SELECT 
-        l.data_leitura,
-        l.valor_sensor,
+        l.data_leitura, 
+        l.valor_sensor, 
         s.sensor_id,
-        s.tipo_sensor,
+        s.tipo_sensor, 
         d.device_name,
         d.latitude,
         d.longitude,
@@ -102,13 +101,10 @@ def carregar_dados_db():
     FROM leituras l
     JOIN sensores s ON l.sensor_id = s.sensor_id
     JOIN devices d ON s.device_id = d.device_id
-    WHERE
-        s.tipo_sensor IN ('A-Axis Delta Angle','B-Axis Delta Angle')
-        AND l.data_leitura >= NOW() - INTERVAL '30 days'
+    WHERE s.tipo_sensor IN ('A-Axis Delta Angle', 'B-Axis Delta Angle')
     ORDER BY l.data_leitura
     """
     return pd.read_sql(query, engine)
-
 
 # ======================================================
 # CARGA DOS DADOS
