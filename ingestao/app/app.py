@@ -127,18 +127,6 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     df_tipo = df[df["tipo_sensor"].astype(str).isin(tipos_selecionados)]
 
-    # 🔥 NOVO FILTRO REAL ONLINE/OFFLINE
-    status_opcoes = st.multiselect(
-        "Filtrar Status",
-        ["online", "offline"],
-        default=["online", "offline"]
-    )
-
-    df_tipo = df_tipo[
-        df_tipo["status"].astype(str).str.lower().isin(status_opcoes)
-    ]
-
-    # 🔥 monta status bonito novamente
     df_devices = df_tipo[["device_name", "status"]].drop_duplicates()
     df_devices["status_lower"] = df_devices["status"].astype(str).str.lower()
 
@@ -163,6 +151,12 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
         sorted(device_label_map.keys()),
         default=[]
     )
+
+devices_selecionados = list(dict.fromkeys(
+    [device_principal] + [device_label_map[l] for l in outros_labels]
+))
+
+df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
 
 # ======================================================
 # 📅 PERÍODO
@@ -225,11 +219,9 @@ df_final["serie"] = df_final["device_name"].astype(str) + " | " + df_final["tipo
 
 fig = go.Figure()
 
-# 🔥 lista ordenada de devices para gerar variação de cor
 devices_unicos = sorted(df_final["device_name"].unique())
 device_index = {d: i for i, d in enumerate(devices_unicos)}
 
-# 🎨 função para variar levemente a cor por device
 def ajustar_cor_hex(hex_color, fator):
     hex_color = hex_color.lstrip("#")
     r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
@@ -246,12 +238,10 @@ for serie in df_final["serie"].unique():
 
     eixo_secundario = tipo in ["Device Temperature", "Air Temperature"]
 
-    # 🎯 cor base do eixo
     cor_base = CORES_SENSOR.get(tipo, "#000000")
 
-    # 🔥 variação automática por device
     idx = device_index.get(device, 0)
-    fator = 1 + (idx * 0.25)  # cada device altera 25% o tom
+    fator = 1 + (idx * 0.25)
     cor_final = ajustar_cor_hex(cor_base, fator)
 
     fig.add_trace(go.Scatter(
@@ -303,7 +293,6 @@ st.plotly_chart(
         "displaylogo": False
     }
 )
-
 
 # ======================================================
 # 🛰️ MAPA
