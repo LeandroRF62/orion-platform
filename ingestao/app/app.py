@@ -206,7 +206,7 @@ with st.sidebar.expander("⚙️ Visualização", expanded=False):
 
     modo_escala = st.radio(
         "Escala de Visualização",
-        ["Absoluta", "Relativa (primeiro valor = zero)", "Relativa manual"]
+        ["Absoluta", "Relativa (primeiro valor = zero)"]
     )
 
 df_final["valor_grafico"] = df_final["valor_sensor"]
@@ -217,7 +217,11 @@ if modo_escala == "Relativa (primeiro valor = zero)":
         .groupby("sensor_id")["valor_sensor"]
         .first()
     )
-    df_final["valor_grafico"] = df_final["valor_sensor"] - df_final["sensor_id"].map(refs)
+    df_final["valor_grafico"] = (
+        df_final["valor_sensor"]
+        - df_final["sensor_id"].map(refs)
+    )
+
 
 # ======================================================
 # HEADER – STATUS / BATERIA / ÚLTIMA TX
