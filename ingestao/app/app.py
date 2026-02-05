@@ -58,13 +58,6 @@ st.set_page_config(
 )
 
 # ===============================
-# 🔄 BOTÃO ATUALIZAR DADOS
-# ===============================
-if st.sidebar.button("🔄 Atualizar Dados"):
-    st.cache_data.clear()
-    st.rerun()
-
-# ===============================
 # QUERY BANCO
 # ===============================
 @st.cache_data(ttl=300)
@@ -100,7 +93,7 @@ df["data_leitura"] = pd.to_datetime(df["data_leitura"]).dt.tz_localize(None)
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
 # ===============================
-# FILTROS
+# FILTRO EIXO
 # ===============================
 tipos_selecionados = st.sidebar.multiselect(
     "Variável do Dispositivo",
@@ -110,6 +103,9 @@ tipos_selecionados = st.sidebar.multiselect(
 
 df_tipo = df[df["tipo_sensor"].astype(str).isin(tipos_selecionados)]
 
+# ===============================
+# FILTRO DISPOSITIVOS
+# ===============================
 df_devices = df_tipo[["device_name","status"]].drop_duplicates()
 df_devices["status_lower"] = df_devices["status"].astype(str).str.lower()
 
@@ -159,6 +155,104 @@ df_final = df_final[
 ]
 
 # ===============================
+# ORDEM DOS EIXOS
+# ===============================
+ordem_series = sorted(
+    df_final["tipo_sensor"].astype(str).unique(),
+    key=lambda x: ("B" in x, x)
+)
+
+df_final["tipo_sensor"] = pd.Categorical(
+    df_final["tipo_sensor"].astype(str),
+    categories=ordem_series,
+    ordered=True
+)
+
+df_final = df_final.sort_values(["tipo_sensor","data_leitura"])
+
+# ===============================
+# 🚨 TARPs
+# ===============================
+st.sidebar.markdown("### 🚨 Limites de Alerta")
+
+device_id_atual = int(df_final.iloc[-1]["device_id"])
+
+try:
+    limites_existentes = pd.read_sql(
+        text("""
+            SELECT *
+            FROM alert_limits
+            WHERE device_id = :device_id
+            ORDER BY tipo_sensor ASC, limite_valor ASC
+        """),
+        engine,
+        params={"device_id":device_id_atual}
+    )
+except:
+    limites_existentes = pd.DataFrame()
+
+tipos_ordenados = sorted(
+    df_final["tipo_sensor"].astype(str).unique(),
+    key=lambda x: ("A" not in x, x)
+)
+
+novo_alerta_tipo = st.sidebar.selectbox("Tipo de Sensor",tipos_ordenados)
+novo_valor = st.sidebar.number_input("Valor do Limite",value=0.0,step=0.1)
+mostrar_linha = st.sidebar.checkbox("Mostrar linha tracejada no gráfico",value=True)
+mensagem_alerta = st.sidebar.text_input("Mensagem do alerta",value="Ex: Fazer inspeção")
+
+if st.sidebar.button("➕ Adicionar Alerta"):
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO alert_limits
+                (device_id,tipo_sensor,limite_valor,mostrar_linha,mensagem)
+                VALUES (:device_id,:tipo,:valor,:mostrar,:mensagem)
+            """),
+            {
+                "device_id":device_id_atual,
+                "tipo":novo_alerta_tipo,
+                "valor":novo_valor,
+                "mostrar":mostrar_linha,
+                "mensagem":mensagem_alerta
+            }
+        )
+    st.sidebar.success("Alerta criado!")
+
+# ===============================
+# 👥 CONTATOS DE ALERTA
+# ===============================
+st.sidebar.markdown("### 👥 Contatos de Alerta")
+
+nome_contato = st.sidebar.text_input("Nome do responsável")
+email_contato = st.sidebar.text_input("Email")
+telefone_contato = st.sidebar.text_input("Telefone (com DDD)")
+
+receber_email = st.sidebar.checkbox("Receber Email", value=True)
+receber_sms = st.sidebar.checkbox("Receber SMS", value=False)
+receber_whatsapp = st.sidebar.checkbox("Receber WhatsApp", value=False)
+
+if st.sidebar.button("➕ Adicionar Contato"):
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO alert_contacts
+                (device_id,nome,email,telefone,receber_email,receber_sms,receber_whatsapp)
+                VALUES (:device_id,:nome,:email,:telefone,:email_ok,:sms_ok,:wpp_ok)
+            """),
+            {
+                "device_id": device_id_atual,
+                "nome": nome_contato,
+                "email": email_contato,
+                "telefone": telefone_contato,
+                "email_ok": receber_email,
+                "sms_ok": receber_sms,
+                "wpp_ok": receber_whatsapp
+            }
+        )
+    st.sidebar.success("Contato adicionado!")
+
+# ===============================
 # ZERO REFERÊNCIA
 # ===============================
 modo_escala = st.sidebar.radio(
@@ -167,48 +261,30 @@ modo_escala = st.sidebar.radio(
 )
 
 if modo_escala=="Relativa":
-    refs = (
-        df_final.sort_values("data_leitura")
-        .groupby("sensor_id")["valor_sensor"]
-        .first()
+    usar_primeiro_valor = st.sidebar.checkbox(
+        "Usar primeiro valor como zero",
+        value=True
     )
+
+    if usar_primeiro_valor:
+        refs = (
+            df_final.sort_values("data_leitura")
+            .groupby("sensor_id")["valor_sensor"]
+            .first()
+        )
+    else:
+        refs = {sid:0 for sid in df_final["sensor_id"].unique()}
+
     df_final["valor_grafico"]=df_final["valor_sensor"]-df_final["sensor_id"].map(refs)
 else:
     df_final["valor_grafico"]=df_final["valor_sensor"]
-
-# ===============================
-# 🚨 DETECÇÃO AUTOMÁTICA DO TARP
-# ===============================
-ultimo_por_sensor = (
-    df_final.sort_values("data_leitura")
-    .groupby(["tipo_sensor"])
-    .last()
-    .reset_index()
-)
-
-maior_valor_atual = ultimo_por_sensor["valor_grafico"].abs().max()
-
-limites_tarp = {
-    "verde": 0,
-    "amarelo": 5,
-    "laranja": 10,
-    "vermelho": 20
-}
-
-nivel_tarp = classificar_tarp(abs(maior_valor_atual), limites_tarp)
-
-emoji_tarp = {
-    "Verde": "🟢",
-    "Amarelo": "🟡",
-    "Laranja": "🟠",
-    "Vermelho": "🔴"
-}.get(nivel_tarp, "⚪")
 
 # ===============================
 # HEADER
 # ===============================
 info = df_final.sort_values("data_leitura").iloc[-1]
 
+status = str(info["status"]).lower()
 bateria = int(info["battery_percentage"]) if pd.notna(info["battery_percentage"]) else 0
 ultima_tx = info["last_upload"]
 
@@ -217,7 +293,7 @@ if pd.notna(ultima_tx):
 
 st.markdown(f"""
 ### {device_principal}
-{emoji_tarp} TARP: {nivel_tarp} | 🔋 {bateria}% | ⏱ Última transmissão: {ultima_tx}
+🟢 Status: {status.upper()} | 🔋 {bateria}% | ⏱ Última transmissão: {ultima_tx}
 """)
 
 # ===============================
@@ -233,6 +309,24 @@ fig=px.line(
     template="plotly_white"
 )
 
-fig.update_layout(height=780)
+if not limites_existentes.empty:
+    for _,alerta in limites_existentes.iterrows():
+        if alerta["mostrar_linha"]:
+            fig.add_hline(
+                y=alerta["limite_valor"],
+                line_dash="dash",
+                annotation_text=alerta["mensagem"],
+                annotation_position="top left"
+            )
+
+fig.update_layout(
+    height=780,
+    legend=dict(
+        orientation="h",
+        y=-0.15,
+        x=0.5,
+        xanchor="center"
+    )
+)
 
 st.plotly_chart(fig,use_container_width=True)
