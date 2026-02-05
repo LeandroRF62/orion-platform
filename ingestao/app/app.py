@@ -151,13 +151,7 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     device_label_map = dict(zip(df_devices["label"], df_devices["device_name"]))
 
-    device_principal_label = st.selectbox(
-        "Selecionar Dispositivo Principal",
-        sorted(device_label_map.keys())
-    )
-
-    device_principal = device_label_map[device_principal_label]
-
+    
     # mantém principal salvo mesmo trocando variável
     if "device_principal_label" not in st.session_state:
         st.session_state["device_principal_label"] = sorted(device_label_map.keys())[0]
