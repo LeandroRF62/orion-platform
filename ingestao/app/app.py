@@ -219,12 +219,34 @@ df_final["serie"] = df_final["device_name"].astype(str) + " | " + df_final["tipo
 
 fig = go.Figure()
 
+# 🔥 lista ordenada de devices para gerar variação de cor
+devices_unicos = sorted(df_final["device_name"].unique())
+device_index = {d: i for i, d in enumerate(devices_unicos)}
+
+# 🎨 função para variar levemente a cor por device
+def ajustar_cor_hex(hex_color, fator):
+    hex_color = hex_color.lstrip("#")
+    r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    r = min(255, max(0, int(r * fator)))
+    g = min(255, max(0, int(g * fator)))
+    b = min(255, max(0, int(b * fator)))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
 for serie in df_final["serie"].unique():
 
     d = df_final[df_final["serie"] == serie]
     tipo = d["tipo_sensor"].iloc[0]
+    device = d["device_name"].iloc[0]
 
     eixo_secundario = tipo in ["Device Temperature", "Air Temperature"]
+
+    # 🎯 cor base do eixo
+    cor_base = CORES_SENSOR.get(tipo, "#000000")
+
+    # 🔥 variação automática por device
+    idx = device_index.get(device, 0)
+    fator = 1 + (idx * 0.25)  # cada device altera 25% o tom
+    cor_final = ajustar_cor_hex(cor_base, fator)
 
     fig.add_trace(go.Scatter(
         x=d["data_leitura"],
@@ -233,7 +255,7 @@ for serie in df_final["serie"].unique():
         name=serie,
         yaxis="y2" if eixo_secundario else "y",
         line=dict(
-            color=CORES_SENSOR.get(tipo, "#000000"),
+            color=cor_final,
             dash="dash" if eixo_secundario else "solid"
         ),
         hovertemplate=
@@ -255,9 +277,7 @@ fig.update_layout(
         xanchor="center",
         title_text=""
     ),
-    yaxis=dict(
-        title=f"<b>{label_y}</b>"
-    ),
+    yaxis=dict(title=f"<b>{label_y}</b>"),
     yaxis2=dict(
         title="<b>Temperatura (°C)</b>",
         overlaying="y",
@@ -265,19 +285,8 @@ fig.update_layout(
     )
 )
 
-fig.update_xaxes(
-    showspikes=True,
-    spikemode="across",
-    spikesnap="cursor",
-    spikethickness=1
-)
-
-fig.update_yaxes(
-    showspikes=True,
-    spikemode="across",
-    spikesnap="cursor",
-    spikethickness=1
-)
+fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor")
+fig.update_yaxes(showspikes=True, spikemode="across", spikesnap="cursor")
 
 st.plotly_chart(
     fig,
