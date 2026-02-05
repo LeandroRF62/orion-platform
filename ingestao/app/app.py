@@ -230,6 +230,16 @@ fig=px.line(
     template="plotly_white"
 )
 
+if not limites_existentes.empty:
+    for _,alerta in limites_existentes.iterrows():
+        if alerta["mostrar_linha"]:
+            fig.add_hline(
+                y=alerta["limite_valor"],
+                line_dash="dash",
+                annotation_text=alerta["mensagem"],
+                annotation_position="top left"
+            )
+
 fig.update_layout(
     height=780,
     legend=dict(
@@ -243,7 +253,52 @@ fig.update_layout(
 st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True})
 
 # ======================================================
-# 📋 TABELA + EXPORTAÇÃO CSV (ADICIONADO SEM REMOVER NADA)
+# 🛰️ MAPA RESTAURADO (NÃO REMOVE NADA DO ORION)
+# ======================================================
+st.subheader("🛰️ Localização dos Dispositivos")
+
+df_mapa = (
+    df_final[["device_name","latitude","longitude","status"]]
+    .drop_duplicates()
+    .dropna(subset=["latitude","longitude"])
+)
+
+df_mapa["cor"] = df_mapa["status"].astype(str).str.lower().apply(
+    lambda x:"#6ee7b7" if x=="online" else "#ef4444"
+)
+
+mapa = go.Figure(go.Scattermapbox(
+    lat=df_mapa["latitude"],
+    lon=df_mapa["longitude"],
+    mode="markers+text",
+    marker=dict(size=20,color=df_mapa["cor"]),
+    text=df_mapa["device_name"],
+    textposition="top center",
+    textfont=dict(size=18,color="white")
+))
+
+mapa.update_layout(
+    height=700,
+    mapbox=dict(
+        accesstoken=MAPBOX_TOKEN,
+        style="satellite-streets",
+        zoom=12,
+        center=dict(
+            lat=df_mapa["latitude"].mean(),
+            lon=df_mapa["longitude"].mean()
+        )
+    ),
+    margin=dict(l=0,r=0,t=0,b=0)
+)
+
+st.plotly_chart(
+    mapa,
+    use_container_width=True,
+    config={"scrollZoom":True}
+)
+
+# ======================================================
+# 📋 TABELA + EXPORTAÇÃO CSV
 # ======================================================
 st.subheader("📋 Dados")
 
@@ -260,3 +315,4 @@ st.download_button(
     "dados_geotecnicos.csv",
     "text/csv"
 )
+
