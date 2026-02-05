@@ -99,44 +99,43 @@ if df.empty:
 df["data_leitura"] = pd.to_datetime(df["data_leitura"]).dt.tz_localize(None)
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
-# ===============================
-# FILTRO EIXO
-# ===============================
-tipos_selecionados = st.sidebar.multiselect(
-    "Variável do Dispositivo",
-    sorted(df["tipo_sensor"].astype(str).unique()),
-    default=sorted(df["tipo_sensor"].astype(str).unique())
-)
+# ======================================================
+# 🎛️ DISPOSITIVO (EXPANDER)
+# ======================================================
+with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
-df_tipo = df[df["tipo_sensor"].astype(str).isin(tipos_selecionados)]
+    tipos_selecionados = st.multiselect(
+        "Variável do Dispositivo",
+        sorted(df["tipo_sensor"].astype(str).unique()),
+        default=sorted(df["tipo_sensor"].astype(str).unique())
+    )
 
-# ===============================
-# FILTRO DISPOSITIVOS
-# ===============================
-df_devices = df_tipo[["device_name","status"]].drop_duplicates()
-df_devices["status_lower"] = df_devices["status"].astype(str).str.lower()
+    df_tipo = df[df["tipo_sensor"].astype(str).isin(tipos_selecionados)]
 
-df_devices["status_str"] = df_devices["status_lower"].map({
-    "online":"🟢 Online",
-    "offline":"🔴 Offline"
-}).fillna("⚪ Desconhecido")
+    df_devices = df_tipo[["device_name","status"]].drop_duplicates()
+    df_devices["status_lower"] = df_devices["status"].astype(str).str.lower()
 
-df_devices["label"] = df_devices["device_name"]+" – "+df_devices["status_str"]
+    df_devices["status_str"] = df_devices["status_lower"].map({
+        "online":"🟢 Online",
+        "offline":"🔴 Offline"
+    }).fillna("⚪ Desconhecido")
 
-device_label_map = dict(zip(df_devices["label"],df_devices["device_name"]))
+    df_devices["label"] = df_devices["device_name"]+" – "+df_devices["status_str"]
 
-device_principal_label = st.sidebar.selectbox(
-    "Selecionar Dispositivo Principal",
-    sorted(device_label_map.keys())
-)
+    device_label_map = dict(zip(df_devices["label"],df_devices["device_name"]))
 
-device_principal = device_label_map[device_principal_label]
+    device_principal_label = st.selectbox(
+        "Selecionar Dispositivo Principal",
+        sorted(device_label_map.keys())
+    )
 
-outros_labels = st.sidebar.multiselect(
-    "Adicionar Outros Dispositivos",
-    sorted(device_label_map.keys()),
-    default=[]
-)
+    device_principal = device_label_map[device_principal_label]
+
+    outros_labels = st.multiselect(
+        "Adicionar Outros Dispositivos",
+        sorted(device_label_map.keys()),
+        default=[]
+    )
 
 devices_selecionados = list(dict.fromkeys(
     [device_principal]+[device_label_map[l] for l in outros_labels]
@@ -144,131 +143,114 @@ devices_selecionados = list(dict.fromkeys(
 
 df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
 
-# ===============================
-# FILTRO PERÍODO
-# ===============================
-st.sidebar.subheader("📅 Período de Análise")
+# ======================================================
+# 📅 PERÍODO (EXPANDER)
+# ======================================================
+with st.sidebar.expander("📅 Período de Análise", expanded=False):
 
-data_min = df_final["data_leitura"].min().date()
-data_max = df_final["data_leitura"].max().date()
+    data_min = df_final["data_leitura"].min().date()
+    data_max = df_final["data_leitura"].max().date()
 
-c1, c2 = st.sidebar.columns(2)
-data_ini = c1.date_input("Data inicial", data_min)
-data_fim = c2.date_input("Data final", data_max)
+    c1, c2 = st.columns(2)
+    data_ini = c1.date_input("Data inicial", data_min)
+    data_fim = c2.date_input("Data final", data_max)
 
 df_final = df_final[
     (df_final["data_leitura"] >= pd.to_datetime(data_ini)) &
     (df_final["data_leitura"] < pd.to_datetime(data_fim) + pd.Timedelta(days=1))
 ]
 
-# ===============================
-# ORDEM DOS EIXOS
-# ===============================
-ordem_series = sorted(
-    df_final["tipo_sensor"].astype(str).unique(),
-    key=lambda x: ("B" in x, x)
-)
+# ======================================================
+# 🚨 TARPs (EXPANDER)
+# ======================================================
+with st.sidebar.expander("🚨 Limites TARP", expanded=False):
 
-df_final["tipo_sensor"] = pd.Categorical(
-    df_final["tipo_sensor"].astype(str),
-    categories=ordem_series,
-    ordered=True
-)
+    device_id_atual = int(df_final.iloc[-1]["device_id"])
 
-df_final = df_final.sort_values(["tipo_sensor","data_leitura"])
+    try:
+        limites_existentes = pd.read_sql(
+            text("""
+                SELECT *
+                FROM alert_limits
+                WHERE device_id = :device_id
+                ORDER BY tipo_sensor ASC, limite_valor ASC
+            """),
+            engine,
+            params={"device_id":device_id_atual}
+        )
+    except:
+        limites_existentes = pd.DataFrame()
 
-# ===============================
-# 🚨 TARPs (NADA ALTERADO)
-# ===============================
-st.sidebar.markdown("### 🚨 Limites de Alerta")
-
-device_id_atual = int(df_final.iloc[-1]["device_id"])
-
-try:
-    limites_existentes = pd.read_sql(
-        text("""
-            SELECT *
-            FROM alert_limits
-            WHERE device_id = :device_id
-            ORDER BY tipo_sensor ASC, limite_valor ASC
-        """),
-        engine,
-        params={"device_id":device_id_atual}
+    tipos_ordenados = sorted(
+        df_final["tipo_sensor"].astype(str).unique(),
+        key=lambda x: ("A" not in x, x)
     )
-except:
-    limites_existentes = pd.DataFrame()
 
-tipos_ordenados = sorted(
-    df_final["tipo_sensor"].astype(str).unique(),
-    key=lambda x: ("A" not in x, x)
-)
+    novo_alerta_tipo = st.selectbox("Tipo de Sensor",tipos_ordenados)
+    novo_valor = st.number_input("Valor do Limite",value=0.0,step=0.1)
+    mostrar_linha = st.checkbox("Mostrar linha tracejada no gráfico",value=True)
+    mensagem_alerta = st.text_input("Mensagem do alerta",value="Ex: Fazer inspeção")
 
-novo_alerta_tipo = st.sidebar.selectbox("Tipo de Sensor",tipos_ordenados)
-novo_valor = st.sidebar.number_input("Valor do Limite",value=0.0,step=0.1)
-mostrar_linha = st.sidebar.checkbox("Mostrar linha tracejada no gráfico",value=True)
-mensagem_alerta = st.sidebar.text_input("Mensagem do alerta",value="Ex: Fazer inspeção")
+    if st.button("➕ Adicionar Alerta"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO alert_limits
+                    (device_id,tipo_sensor,limite_valor,mostrar_linha,mensagem)
+                    VALUES (:device_id,:tipo,:valor,:mostrar,:mensagem)
+                """),
+                {
+                    "device_id":device_id_atual,
+                    "tipo":novo_alerta_tipo,
+                    "valor":novo_valor,
+                    "mostrar":mostrar_linha,
+                    "mensagem":mensagem_alerta
+                }
+            )
+        st.success("Alerta criado!")
 
-if st.sidebar.button("➕ Adicionar Alerta"):
-    with engine.begin() as conn:
-        conn.execute(
-            text("""
-                INSERT INTO alert_limits
-                (device_id,tipo_sensor,limite_valor,mostrar_linha,mensagem)
-                VALUES (:device_id,:tipo,:valor,:mostrar,:mensagem)
-            """),
-            {
-                "device_id":device_id_atual,
-                "tipo":novo_alerta_tipo,
-                "valor":novo_valor,
-                "mostrar":mostrar_linha,
-                "mensagem":mensagem_alerta
-            }
-        )
-    st.sidebar.success("Alerta criado!")
+# ======================================================
+# 👥 CONTATOS (EXPANDER)
+# ======================================================
+with st.sidebar.expander("👥 Contatos", expanded=False):
 
-# ===============================
-# 👥 CONTATOS DE ALERTA (NADA ALTERADO)
-# ===============================
-st.sidebar.markdown("### 👥 Contatos de Alerta")
+    nome_contato = st.text_input("Nome do responsável")
+    email_contato = st.text_input("Email")
 
-nome_contato = st.sidebar.text_input("Nome do responsável")
-email_contato = st.sidebar.text_input("Email")
+    telefone_contato = ""
+    receber_email = True
+    receber_sms = False
+    receber_whatsapp = False
 
-# Campo telefone removido do painel
-telefone_contato = ""
+    if st.button("➕ Adicionar Contato"):
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO alert_contacts
+                    (device_id,nome,email,telefone,receber_email,receber_sms,receber_whatsapp)
+                    VALUES (:device_id,:nome,:email,:telefone,:email_ok,:sms_ok,:wpp_ok)
+                """),
+                {
+                    "device_id": device_id_atual,
+                    "nome": nome_contato,
+                    "email": email_contato,
+                    "telefone": telefone_contato,
+                    "email_ok": receber_email,
+                    "sms_ok": receber_sms,
+                    "wpp_ok": receber_whatsapp
+                }
+            )
+        st.success("Contato adicionado!")
 
-# SMS e WhatsApp removidos da interface
-receber_email = True
-receber_sms = False
-receber_whatsapp = False
+# ======================================================
+# ⚙️ VISUALIZAÇÃO (EXPANDER)
+# ======================================================
+with st.sidebar.expander("⚙️ Visualização", expanded=False):
 
-if st.sidebar.button("➕ Adicionar Contato"):
-    with engine.begin() as conn:
-        conn.execute(
-            text("""
-                INSERT INTO alert_contacts
-                (device_id,nome,email,telefone,receber_email,receber_sms,receber_whatsapp)
-                VALUES (:device_id,:nome,:email,:telefone,:email_ok,:sms_ok,:wpp_ok)
-            """),
-            {
-                "device_id": device_id_atual,
-                "nome": nome_contato,
-                "email": email_contato,
-                "telefone": telefone_contato,
-                "email_ok": receber_email,
-                "sms_ok": receber_sms,
-                "wpp_ok": receber_whatsapp
-            }
-        )
-    st.sidebar.success("Contato adicionado!")
-
-# ===============================
-# ZERO REFERÊNCIA
-# ===============================
-modo_escala = st.sidebar.radio(
-    "Escala de Visualização",
-    ["Absoluta","Relativa"]
-)
+    modo_escala = st.radio(
+        "Escala de Visualização",
+        ["Absoluta","Relativa"]
+    )
 
 if modo_escala=="Relativa":
     refs = (
@@ -281,7 +263,7 @@ else:
     df_final["valor_grafico"]=df_final["valor_sensor"]
 
 # ======================================================
-# 🚨 MOTOR TARP CORRIGIDO (ÚNICA ALTERAÇÃO REAL)
+# 🚨 MOTOR TARP
 # ======================================================
 df_tipo_trigger = df_tipo.copy()
 
@@ -336,76 +318,6 @@ st.markdown(f"""
 ### {device_principal}
 {emoji_tarp} TARP: {nivel_tarp} | 🟢 Status: {status.upper()} | 🔋 {bateria}% | ⏱ Última transmissão: {ultima_tx}
 """)
-
-# ======================================================
-# 📨 ENVIO AUTOMÁTICO DE EMAIL (TRIGGER TARP)
-# ======================================================
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-
-def enviar_email_alerta(destinatario, assunto, mensagem):
-
-    try:
-        EMAIL_HOST = st.secrets["EMAIL_HOST"]
-        EMAIL_PORT = int(st.secrets["EMAIL_PORT"])
-        EMAIL_USER = st.secrets["EMAIL_USER"]
-        EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
-        EMAIL_FROM = st.secrets["EMAIL_FROM"]
-
-        msg = MIMEMultipart()
-        msg["From"] = EMAIL_FROM
-        msg["To"] = destinatario
-        msg["Subject"] = assunto
-
-        msg.attach(MIMEText(mensagem, "plain"))
-
-        servidor = smtplib.SMTP(EMAIL_HOST, EMAIL_PORT)
-        servidor.starttls()
-        servidor.login(EMAIL_USER, EMAIL_PASSWORD)
-        servidor.send_message(msg)
-        servidor.quit()
-
-        return True
-
-    except Exception as e:
-        print("Erro envio email:", e)
-        return False
-
-
-# 🔴 DISPARO AUTOMÁTICO SE TARP VERMELHO
-if nivel_tarp == "Vermelho":
-
-    try:
-        contatos = pd.read_sql(
-            text("""
-                SELECT *
-                FROM alert_contacts
-                WHERE device_id = :device_id
-                AND receber_email = true
-            """),
-            engine,
-            params={"device_id":device_id_atual}
-        )
-
-        for _, contato in contatos.iterrows():
-
-            assunto = f"🚨 ALERTA TARP VERMELHO - {device_principal}"
-
-            mensagem = f"""
-Dispositivo: {device_principal}
-Status TARP: {nivel_tarp}
-
-Valor atual acima do limite configurado.
-
-Acesse o Orion para mais detalhes.
-"""
-
-            enviar_email_alerta(contato["email"], assunto, mensagem)
-
-    except Exception as e:
-        print("Erro trigger email:", e)
-
 
 # ===============================
 # GRÁFICO
