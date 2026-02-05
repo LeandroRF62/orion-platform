@@ -20,6 +20,16 @@ def classificar_tarp(valor, limites):
     else:
         return "Verde"
 
+# ======================================================
+# 🎨 CORES FIXAS DEFINIDAS
+# ======================================================
+CORES_SENSOR = {
+    "A-Axis Delta Angle": "#2563eb",   # Azul
+    "B-Axis Delta Angle": "#f97316",   # Laranja
+    "Device Temperature": "#ef4444",   # Vermelho
+    "Air Temperature": "#a855f7"       # Roxo
+}
+
 # ===============================
 # AUTENTICAÇÃO
 # ===============================
@@ -65,7 +75,7 @@ if st.sidebar.button("🔄 Atualizar Dados"):
     st.rerun()
 
 # ===============================
-# QUERY BANCO
+# QUERY BANCO (🔥 AGORA COM TEMPERATURA)
 # ===============================
 @st.cache_data(ttl=300)
 def carregar_dados_db():
@@ -85,7 +95,12 @@ def carregar_dados_db():
         FROM leituras l
         JOIN sensores s ON l.sensor_id = s.sensor_id
         JOIN devices d ON s.device_id = d.device_id
-        WHERE s.tipo_sensor IN ('A-Axis Delta Angle','B-Axis Delta Angle')
+        WHERE s.tipo_sensor IN (
+            'A-Axis Delta Angle',
+            'B-Axis Delta Angle',
+            'Device Temperature',
+            'Air Temperature'
+        )
         ORDER BY l.data_leitura
     """
     return pd.read_sql(query, engine)
@@ -180,34 +195,6 @@ if modo_escala == "Relativa (primeiro valor = zero)":
     )
     df_final["valor_grafico"] = df_final["valor_sensor"] - df_final["sensor_id"].map(refs)
 
-elif modo_escala == "Relativa manual":
-
-    referencia_manual = {}
-
-    sensores_unicos = (
-        df_final[["sensor_id", "device_name", "tipo_sensor"]]
-        .drop_duplicates()
-        .sort_values(["device_name", "tipo_sensor"])
-    )
-
-    for _, row in sensores_unicos.iterrows():
-        sid = row["sensor_id"]
-        device = row["device_name"]
-        eixo = row["tipo_sensor"]
-        label = f"Ref – {device} | {eixo}"
-
-        referencia_manual[sid] = st.sidebar.number_input(
-            label,
-            value=0.0,
-            step=0.01,
-            key=f"ref_{sid}"
-        )
-
-    df_final["valor_grafico"] = df_final.apply(
-        lambda r: r["valor_sensor"] - referencia_manual.get(r["sensor_id"], 0),
-        axis=1
-    )
-
 # ======================================================
 # HEADER
 # ======================================================
@@ -238,6 +225,16 @@ fig = px.line(
     template="plotly_white"
 )
 
+# 🔥 APLICAR CORES FIXAS + TRACEJADO
+for trace in fig.data:
+    tipo = trace.name.split("|")[-1].strip()
+
+    if tipo in CORES_SENSOR:
+        trace.line.color = CORES_SENSOR[tipo]
+
+    if tipo in ["Device Temperature", "Air Temperature"]:
+        trace.line.dash = "dash"
+
 fig.update_traces(
     hovertemplate=
     "<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>" +
@@ -245,19 +242,8 @@ fig.update_traces(
     "Valor: %{y:.4f}<extra></extra>"
 )
 
-fig.update_xaxes(
-    showspikes=True,
-    spikemode="across",
-    spikesnap="cursor",
-    spikethickness=1
-)
-
-fig.update_yaxes(
-    showspikes=True,
-    spikemode="across",
-    spikesnap="cursor",
-    spikethickness=1
-)
+fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikethickness=1)
+fig.update_yaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikethickness=1)
 
 label_y = "Valor Absoluto" if modo_escala == "Absoluta" else "Δ Valor Relativo"
 
@@ -272,10 +258,9 @@ fig.update_layout(
         x=0.5,
         xanchor="center",
         title_text=""
-    )
+    ),
+    dragmode="pan"
 )
-
-fig.update_layout(dragmode="pan")
 
 st.plotly_chart(
     fig,
