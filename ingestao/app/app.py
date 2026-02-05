@@ -146,15 +146,16 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     device_principal = device_label_map[device_principal_label]
 
+    # inicializa session_state apenas uma vez
     if "outros_labels" not in st.session_state:
-       st.session_state.outros_labels = []
+        st.session_state["outros_labels"] = []
 
     outros_labels = st.multiselect(
-       "Adicionar Outros Dispositivos",
+        "Adicionar Outros Dispositivos",
         sorted(device_label_map.keys()),
-        default=st.session_state.outros_labels,
         key="outros_labels"
     )
+
   
 devices_selecionados = list(dict.fromkeys(
     [device_principal] + [device_label_map[l] for l in outros_labels]
