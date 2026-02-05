@@ -201,7 +201,7 @@ if modo_escala == "Relativa (primeiro valor = zero)":
 info = df_final.sort_values("data_leitura").iloc[-1]
 
 status = str(info["status"]).lower()
-bateria = int(info["battery_percent"]) if pd.notna(info["battery_percent"]) else 0
+bateria = int(info["battery_percentage"]) if pd.notna(info["battery_percentage"]) else 0
 ultima_tx = info["last_upload"]
 
 if pd.notna(ultima_tx):
