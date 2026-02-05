@@ -218,27 +218,27 @@ else:
 
 if len(devices_selecionados) == 1:
     st.markdown(
-        f"""
-        <div style="display:flex;align-items:center;gap:14px;padding:8px 0;">
-            <h3 style="margin:0;">{device_principal}</h3>
+f"""
+<div style="display:flex;align-items:center;gap:14px;padding:8px 0;">
+<h3 style="margin:0;">{device_principal}</h3>
 
-            <span style="background:{cor_status};color:white;padding:4px 10px;border-radius:6px;font-size:14px;">
-                {status.capitalize()}
-            </span>
+<span style="background:{cor_status};color:white;padding:4px 10px;border-radius:6px;font-size:14px;">
+{status.capitalize()}
+</span>
 
-            <div style="display:flex;align-items:center;gap:6px;background:#f3f4f6;padding:4px 10px;border-radius:6px;">
-                <div style="width:28px;height:12px;border:2px solid #111;border-radius:3px;">
-                    <div style="width:{bateria}%;height:100%;background:{cor_bateria};"></div>
-                </div>
-                <strong>{bateria}%</strong>
-            </div>
+<div style="display:flex;align-items:center;gap:6px;background:#f3f4f6;padding:4px 10px;border-radius:6px;">
+<div style="width:28px;height:12px;border:2px solid #111;border-radius:3px;">
+<div style="width:{bateria}%;height:100%;background:{cor_bateria};"></div>
+</div>
+<strong>{bateria}%</strong>
+</div>
 
-            <span style="color:#f97316;font-size:16px;">
-                ⏱ Última transmissão: {ultima_tx}
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True   # 👈 ESSENCIAL
+<span style="color:#f97316;font-size:16px;">
+⏱ Última transmissão: {ultima_tx}
+</span>
+</div>
+""",
+        unsafe_allow_html=True
     )
 
 
