@@ -7,6 +7,29 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 
+# ======================================================
+# 🚨 FUNÇÃO DE CLASSIFICAÇÃO TARP (NOVO)
+# ======================================================
+def classificar_tarp(valor, limites):
+    """
+    valor: valor atual do sensor
+    limites: dict com níveis TARP
+    {
+        "verde":0,
+        "amarelo":5,
+        "laranja":10,
+        "vermelho":20
+    }
+    """
+    if valor >= limites.get("vermelho", float("inf")):
+        return "Vermelho"
+    elif valor >= limites.get("laranja", float("inf")):
+        return "Laranja"
+    elif valor >= limites.get("amarelo", float("inf")):
+        return "Amarelo"
+    else:
+        return "Verde"
+
 # ===============================
 # AUTENTICAÇÃO
 # ===============================
