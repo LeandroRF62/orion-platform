@@ -234,6 +234,30 @@ fig=px.line(
     template="plotly_white"
 )
 
+# 🔥 hover profissional (data/hora como título)
+fig.update_traces(
+    hovertemplate=
+    "<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>" +
+    "%{fullData.name}<br>" +
+    "Valor: %{y:.4f}<extra></extra>"
+)
+
+fig.update_xaxes(
+    showspikes=True,
+    spikemode="across",
+    spikesnap="cursor",
+    spikethickness=1
+)
+
+fig.update_yaxes(
+    showspikes=True,
+    spikemode="across",
+    spikesnap="cursor",
+    spikethickness=1
+)
+
+
+
 # 🔥 LABEL DINÂMICO Y
 if modo_escala=="Absoluta":
     label_y="Valor Absoluto"
