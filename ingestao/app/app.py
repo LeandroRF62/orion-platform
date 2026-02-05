@@ -201,28 +201,12 @@ if modo_escala == "Relativa (primeiro valor = zero)":
 info = df_final.sort_values("data_leitura").iloc[-1]
 
 status = str(info["status"]).lower()
-
-# 🔋 bateria (nome correto do campo no seu df)
-bateria = int(info["battery_percentage"]) if pd.notna(info["battery_percentage"]) else 0
-
-# ⏱ ultima transmissão (corrigido timezone)
-ultima_tx = pd.to_datetime(info["last_upload"], errors="coerce")
+bateria = int(info["battery_percent"]) if pd.notna(info["battery_percent"]) else 0
+ultima_tx = info["last_upload"]
 
 if pd.notna(ultima_tx):
-    ultima_tx = (ultima_tx - pd.Timedelta(hours=3))
-    delta = pd.Timestamp.now() - ultima_tx
+    ultima_tx = (ultima_tx - pd.Timedelta(hours=3)).strftime("%d-%m-%Y %H:%M:%S")
 
-    minutos = int(delta.total_seconds() / 60)
-
-    if minutos < 60:
-        texto_tx = f"Last transmission {minutos} minutes ago"
-    else:
-        horas = int(minutos / 60)
-        texto_tx = f"Last transmission {horas}h ago"
-else:
-    texto_tx = "Sem transmissão"
-
-# 🎨 cores
 cor_status = "#22c55e" if status == "online" else "#ef4444"
 
 if bateria >= 75:
@@ -232,47 +216,30 @@ elif bateria >= 40:
 else:
     cor_bateria = "#ef4444"
 
-# 🔥 só mostra header completo quando for 1 device
 if len(devices_selecionados) == 1:
+    st.markdown(
+        f"""
+        <div style="display:flex;align-items:center;gap:14px;padding:8px 0;">
+            <h3 style="margin:0;">{device_principal}</h3>
 
-    st.markdown(f"""
-    <div style="display:flex;align-items:center;gap:14px;padding:8px 0;">
-        <h3 style="margin:0;font-weight:600;">
-            {device_principal}
-        </h3>
+            <span style="background:{cor_status};color:white;padding:4px 10px;border-radius:6px;font-size:14px;">
+                {status.capitalize()}
+            </span>
 
-        <span style="background:{cor_status};
-                     color:white;
-                     padding:4px 10px;
-                     border-radius:6px;
-                     font-size:14px;">
-            {status.capitalize()}
-        </span>
-
-        <div style="display:flex;align-items:center;gap:6px;
-                    background:#f3f4f6;
-                    padding:4px 10px;
-                    border-radius:6px;">
-
-            <div style="width:28px;height:12px;
-                        border:2px solid #111;
-                        border-radius:3px;">
-                <div style="width:{bateria}%;
-                            height:100%;
-                            background:{cor_bateria};">
+            <div style="display:flex;align-items:center;gap:6px;background:#f3f4f6;padding:4px 10px;border-radius:6px;">
+                <div style="width:28px;height:12px;border:2px solid #111;border-radius:3px;">
+                    <div style="width:{bateria}%;height:100%;background:{cor_bateria};"></div>
                 </div>
+                <strong>{bateria}%</strong>
             </div>
 
-            <strong>{bateria}%</strong>
+            <span style="color:#f97316;font-size:16px;">
+                ⏱ Última transmissão: {ultima_tx}
+            </span>
         </div>
-
-        <span style="color:#f97316;font-size:16px;">
-            ⏱ {texto_tx}
-        </span>
-    </div>
-    """, unsafe_allow_html=True)
-
-
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ===============================
 # GRÁFICO
