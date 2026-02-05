@@ -254,7 +254,17 @@ fig.update_layout(
     )
 )
 
-st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True})
+fig.update_layout(dragmode="pan")
+
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={
+        "scrollZoom": True,
+        "doubleClick": "reset",
+        "displaylogo": False
+    }
+)
 
 # ======================================================
 # 🛰️ MAPA
