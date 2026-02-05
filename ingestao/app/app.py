@@ -120,16 +120,14 @@ tipos_ordenados = sorted(
 
 device_id_atual = df_final.iloc[-1]["device_id"]
 
-with engine.begin() as conn:
-    limites_existentes = pd.read_sql(
-        text("""
-            SELECT *
-            FROM alert_limits
-            WHERE device_id = :device_id
-        """),
-        conn,
-        params={"device_id":device_id_atual}
-    )
+query_limites = f"""
+SELECT *
+FROM alert_limits
+WHERE device_id = {device_id_atual}
+"""
+
+limites_existentes = pd.read_sql(query_limites, engine)
+
 
 novo_alerta_tipo = st.sidebar.selectbox(
     "Tipo de Sensor",
