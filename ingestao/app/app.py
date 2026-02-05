@@ -206,7 +206,7 @@ ultima_tx = info["last_upload"]
 
 # 🔥 ajusta horário Brasil
 if pd.notna(ultima_tx):
-    delta = pd.Timestamp.utcnow() - ultima_tx
+    delta = pd.Timestamp.now() - ultima_tx
     minutos = int(delta.total_seconds() / 60)
     texto_tx = f"Last transmission {minutos} minutes ago"
 else:
