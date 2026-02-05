@@ -305,6 +305,19 @@ st.markdown(f"""
 """)
 
 # ===============================
+# 🚨 DETECÇÃO AUTOMÁTICA DO TARP (NOVO)
+# ===============================
+ultimo_por_sensor = (
+    df_final.sort_values("data_leitura")
+    .groupby(["tipo_sensor"])
+    .last()
+    .reset_index()
+)
+
+maior_valor_atual = ultimo_por_sensor["valor_grafico"].abs().max()
+
+
+# ===============================
 # GRÁFICO
 # ===============================
 df_final["serie"]=df_final["device_name"].astype(str)+" | "+df_final["tipo_sensor"].astype(str)
