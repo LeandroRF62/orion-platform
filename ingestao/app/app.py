@@ -115,6 +115,18 @@ df["data_leitura"] = pd.to_datetime(df["data_leitura"]).dt.tz_localize(None)
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
 # ======================================================
+# 🎯 FILTRO - SOMENTE TILTÍMETROS
+# ======================================================
+tilt_devices = (
+    df[df["tipo_sensor"].isin(["A-Axis Delta Angle", "B-Axis Delta Angle"])]
+    ["device_name"]
+    .unique()
+)
+
+df = df[df["device_name"].isin(tilt_devices)]
+
+
+# ======================================================
 # 🎛️ DISPOSITIVO
 # ======================================================
 with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
@@ -145,6 +157,19 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
     )
 
     device_principal = device_label_map[device_principal_label]
+
+    # mantém principal salvo mesmo trocando variável
+    if "device_principal_label" not in st.session_state:
+        st.session_state["device_principal_label"] = sorted(device_label_map.keys())[0]
+
+    device_principal_label = st.selectbox(
+        "Selecionar Dispositivo Principal",
+        sorted(device_label_map.keys()),
+        key="device_principal_label"
+    )
+
+    device_principal = device_label_map[device_principal_label]
+
 
     # inicializa session_state apenas uma vez
     if "outros_labels" not in st.session_state:
