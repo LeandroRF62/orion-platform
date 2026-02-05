@@ -5,6 +5,7 @@ from psycopg2.extras import execute_batch
 from datetime import datetime, timedelta, timezone
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from alert_engine import processar_alertas_status
 import time
 
 # ======================================================
@@ -15,9 +16,6 @@ BASE_URL = "https://api.oriondata.io/api"
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# ======================================================
-# CONTROLE DE MODO
-# ======================================================
 MODO_HISTORICO = True
 DATA_INICIAL_HISTORICO = "2026-01-01T00:00:00"
 JANELA_HORAS = 1
@@ -71,6 +69,9 @@ def cadastrar_devices_e_sensores(token, conn):
 
     for device in r.json():
 
+        # ======================================================
+        # INSERT DEVICE
+        # ======================================================
         cur.execute("""
             INSERT INTO devices (
                 device_id, device_name, serial_number, status,
@@ -95,6 +96,18 @@ def cadastrar_devices_e_sensores(token, conn):
             device.get("batteryPercentage")
         ))
 
+        # ======================================================
+        # 🔥 ALERTA DE MUDANÇA DE STATUS
+        # ======================================================
+        processar_alertas_status(
+            conn,
+            device["deviceId"],
+            device.get("status")
+        )
+
+        # ======================================================
+        # SENSORES
+        # ======================================================
         for sensor in device.get("sensors", []):
             sensor_ids.append(sensor["sensorId"])
 
