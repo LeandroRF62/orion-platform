@@ -281,11 +281,12 @@ else:
 # 🚨 MOTOR DE TRIGGER AUTOMÁTICO TARP
 # ======================================================
 ultimo_por_sensor = (
-    df_final.sort_values("data_leitura")
+    df_tipo.sort_values("data_leitura")
     .groupby(["tipo_sensor"])
     .last()
     .reset_index()
 )
+
 
 maior_valor_atual = ultimo_por_sensor["valor_grafico"].abs().max()
 
