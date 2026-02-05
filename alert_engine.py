@@ -42,7 +42,6 @@ def enviar_email(destinatario, assunto, mensagem):
     except Exception as e:
         print("Erro envio:", e)
 
-
 # ======================================================
 # CLASSIFICADOR TARP
 # ======================================================
@@ -56,7 +55,6 @@ def classificar_tarp(valor):
         return "Amarelo"
     else:
         return "Verde"
-
 
 # ======================================================
 # LOOP PRINCIPAL
@@ -101,12 +99,45 @@ while True:
             nivel_tarp = classificar_tarp(maior_valor)
 
             device_name = grupo.iloc[0]["device_name"]
-            status = grupo.iloc[0]["status"]
+            status = str(grupo.iloc[0]["status"]).lower()
 
             print(device_name, nivel_tarp, status)
 
-            # 🚨 SE VERMELHO OU OFFLINE
-            if nivel_tarp == "Vermelho" or str(status).lower() == "offline":
+            # ======================================================
+            # 🔥 ANTI-SPAM INTELIGENTE (NOVO)
+            # ======================================================
+
+            estado_anterior = pd.read_sql(
+                text("""
+                    SELECT *
+                    FROM alert_status_log
+                    WHERE device_id = :device_id
+                """),
+                engine,
+                params={"device_id": int(device_id)}
+            )
+
+            ultimo_tarp_enviado = None
+            ultimo_status_enviado = None
+
+            if not estado_anterior.empty:
+                ultimo_tarp_enviado = estado_anterior.iloc[0]["ultimo_tarp"]
+                ultimo_status_enviado = estado_anterior.iloc[0]["ultimo_status"]
+
+            precisa_enviar = False
+
+            # 🚨 mudou para vermelho?
+            if nivel_tarp == "Vermelho" and ultimo_tarp_enviado != "Vermelho":
+                precisa_enviar = True
+
+            # 🚨 mudou para offline?
+            if status == "offline" and ultimo_status_enviado != "offline":
+                precisa_enviar = True
+
+            # ======================================================
+            # 🚨 ENVIO CONTROLADO
+            # ======================================================
+            if precisa_enviar:
 
                 contatos = pd.read_sql(
                     text("""
@@ -116,7 +147,7 @@ while True:
                         AND receber_email = true
                     """),
                     engine,
-                    params={"device_id":int(device_id)}
+                    params={"device_id": int(device_id)}
                 )
 
                 for _, contato in contatos.iterrows():
@@ -132,6 +163,26 @@ Verifique imediatamente no Orion.
 """
 
                     enviar_email(contato["email"], assunto, mensagem)
+
+                # 🔥 SALVAR ESTADO ENVIADO
+                with engine.begin() as conn:
+                    conn.execute(
+                        text("""
+                            INSERT INTO alert_status_log
+                            (device_id, ultimo_tarp, ultimo_status, ultima_atualizacao)
+                            VALUES (:device_id, :tarp, :status, now())
+                            ON CONFLICT (device_id)
+                            DO UPDATE SET
+                                ultimo_tarp = :tarp,
+                                ultimo_status = :status,
+                                ultima_atualizacao = now()
+                        """),
+                        {
+                            "device_id": int(device_id),
+                            "tarp": nivel_tarp,
+                            "status": status
+                        }
+                    )
 
     except Exception as e:
         print("Erro loop:", e)
