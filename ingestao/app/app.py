@@ -7,9 +7,9 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 
-# ===============================
+# ======================================================
 # AUTENTICAÇÃO (PRIMEIRA COISA DO APP)
-# ===============================
+# ======================================================
 APP_PASSWORD = os.getenv("APP_PASSWORD", "orion123")
 
 if "auth_ok" not in st.session_state:
@@ -29,14 +29,14 @@ if not st.session_state.auth_ok:
 
     st.stop()
 
-# ===============================
-# LOAD ENV (LOCAL APENAS)
-# ===============================
+# ======================================================
+# LOAD ENV (apenas local — ignorado na cloud)
+# ======================================================
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 # ======================================================
-# CONEXÃO COM BANCO (CLOUD)
+# CONEXÃO COM BANCO
 # ======================================================
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -52,8 +52,9 @@ MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
 if not MAPBOX_TOKEN:
     st.warning("MAPBOX_TOKEN não configurado (mapa pode não aparecer)")
 
-ARQUIVO_CACHE = "cache_orion_dev.csv"
-
+# ======================================================
+# CONFIG STREAMLIT
+# ======================================================
 st.set_page_config(
     page_title="Gestão Geotécnica Orion",
     layout="wide",
@@ -61,7 +62,7 @@ st.set_page_config(
 )
 
 # ======================================================
-# CABEÇALHO
+# HEADER
 # ======================================================
 if os.path.exists("header_orion.png"):
     st.image("header_orion.png", use_container_width=True)
@@ -82,16 +83,16 @@ if st.sidebar.button("🔄 Atualizar dados"):
     st.rerun()
 
 # ======================================================
-# FUNÇÃO – CARGA DO BANCO
+# QUERY OTIMIZADA (🔥 MELHORIA IMPORTANTE)
 # ======================================================
 @st.cache_data(ttl=300)
 def carregar_dados_db():
     query = """
     SELECT 
-        l.data_leitura, 
-        l.valor_sensor, 
+        l.data_leitura,
+        l.valor_sensor,
         s.sensor_id,
-        s.tipo_sensor, 
+        s.tipo_sensor,
         d.device_name,
         d.latitude,
         d.longitude,
@@ -101,24 +102,22 @@ def carregar_dados_db():
     FROM leituras l
     JOIN sensores s ON l.sensor_id = s.sensor_id
     JOIN devices d ON s.device_id = d.device_id
-    WHERE s.tipo_sensor IN ('A-Axis Delta Angle', 'B-Axis Delta Angle')
+    WHERE
+        s.tipo_sensor IN ('A-Axis Delta Angle','B-Axis Delta Angle')
+        AND l.data_leitura >= NOW() - INTERVAL '30 days'
     ORDER BY l.data_leitura
     """
     return pd.read_sql(query, engine)
 
-# ======================================================
-# CARGA DOS DADOS
-# ======================================================
-if modo_dev and os.path.exists(ARQUIVO_CACHE):
-    df = pd.read_csv(ARQUIVO_CACHE)
-else:
-    df = carregar_dados_db()
-    df.to_csv(ARQUIVO_CACHE, index=False)
+df = carregar_dados_db()
 
-df["data_leitura"] = pd.to_datetime(df["data_leitura"], errors="coerce").dt.tz_localize(None)
+# ======================================================
+# NORMALIZAÇÃO
+# ======================================================
+df['data_leitura'] = pd.to_datetime(df['data_leitura'], errors='coerce').dt.tz_localize(None)
 
-if "last_upload" in df.columns:
-    df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
+if 'last_upload' in df.columns:
+    df['last_upload'] = pd.to_datetime(df['last_upload'], errors='coerce')
 
 if df.empty:
     st.stop()
@@ -128,16 +127,16 @@ if df.empty:
 # ======================================================
 tipos_selecionados = st.sidebar.multiselect(
     "Variável do Dispositivo",
-    sorted(df["tipo_sensor"].unique()),
-    default=sorted(df["tipo_sensor"].unique())
+    sorted(df['tipo_sensor'].unique()),
+    default=sorted(df['tipo_sensor'].unique())
 )
 
-df_tipo = df[df["tipo_sensor"].isin(tipos_selecionados)]
+df_tipo = df[df['tipo_sensor'].isin(tipos_selecionados)]
 
+# Status
 st.sidebar.subheader("📡 Status do Dispositivo")
 
 col1, col2 = st.sidebar.columns(2)
-
 with col1:
     filtro_online = st.checkbox("Online", value=True)
 with col2:
@@ -149,19 +148,20 @@ if filtro_online:
 if filtro_offline:
     status_permitidos.append("offline")
 
-df_devices = df[["device_name", "status"]].drop_duplicates()
-df_devices["status_lower"] = df_devices["status"].astype(str).str.lower()
+df_devices = df[['device_name','status']].drop_duplicates()
+df_devices['status_lower'] = df_devices['status'].astype(str).str.lower()
 
 if status_permitidos:
-    df_devices = df_devices[df_devices["status_lower"].isin(status_permitidos)]
+    df_devices = df_devices[df_devices['status_lower'].isin(status_permitidos)]
 
-df_devices["status_str"] = df_devices["status_lower"].map(
-    {"online": "🟢 Online", "offline": "🔴 Offline"}
-).fillna("⚪ Desconhecido")
+df_devices['status_str'] = df_devices['status_lower'].map({
+    'online':'🟢 Online',
+    'offline':'🔴 Offline'
+}).fillna('⚪ Desconhecido')
 
-df_devices["label"] = df_devices["device_name"] + " – " + df_devices["status_str"]
+df_devices['label'] = df_devices['device_name'] + " – " + df_devices['status_str']
 
-device_label_map = dict(zip(df_devices["label"], df_devices["device_name"]))
+device_label_map = dict(zip(df_devices['label'], df_devices['device_name']))
 
 device_principal_label = st.sidebar.selectbox(
     "Selecionar Dispositivo Principal",
@@ -183,8 +183,9 @@ devices_selecionados = list(dict.fromkeys([device_principal] + outros_devices))
 # PERÍODO
 # ======================================================
 st.sidebar.subheader("📅 Período de Análise")
-data_min = df_tipo["data_leitura"].min().date()
-data_max = df_tipo["data_leitura"].max().date()
+
+data_min = df_tipo['data_leitura'].min().date()
+data_max = df_tipo['data_leitura'].max().date()
 
 c1, c2 = st.sidebar.columns(2)
 data_ini = c1.date_input("Data inicial", data_min)
@@ -194,9 +195,9 @@ data_ini_dt = pd.to_datetime(data_ini)
 data_fim_dt = pd.to_datetime(data_fim) + pd.Timedelta(days=1)
 
 df_final = df_tipo[
-    (df_tipo["device_name"].isin(devices_selecionados))
-    & (df_tipo["data_leitura"] >= data_ini_dt)
-    & (df_tipo["data_leitura"] < data_fim_dt)
+    (df_tipo['device_name'].isin(devices_selecionados)) &
+    (df_tipo['data_leitura'] >= data_ini_dt) &
+    (df_tipo['data_leitura'] < data_fim_dt)
 ].copy()
 
 if df_final.empty:
@@ -205,50 +206,22 @@ if df_final.empty:
 # ======================================================
 # ESCALA
 # ======================================================
-dict_referencias = {}
-
 modo_escala = st.sidebar.radio(
     "Escala de Visualização",
-    ["Absoluta", "Relativa"]
+    ["Absoluta","Relativa"]
 )
 
 if modo_escala == "Relativa":
-    usar_primeiro_valor = st.sidebar.checkbox(
-        "Usar primeiro valor como zero",
-        value=True
-    )
-
-    sensores_visiveis = df_final[["sensor_id", "tipo_sensor"]].drop_duplicates()
-
-    if usar_primeiro_valor:
-        for sensor_id in sensores_visiveis["sensor_id"]:
-            dict_referencias[sensor_id] = (
-                df_final[df_final["sensor_id"] == sensor_id]
-                .sort_values("data_leitura")
-                .iloc[0]["valor_sensor"]
-            )
-    else:
-        for _, row in sensores_visiveis.iterrows():
-            dict_referencias[row["sensor_id"]] = st.sidebar.number_input(
-                f"Zero – {row['tipo_sensor']} (Sensor {row['sensor_id']})",
-                value=0.0,
-                format="%.4f",
-                key=f"zero_{row['sensor_id']}"
-            )
-
-    df_final["valor_grafico"] = df_final.apply(
-        lambda r: r["valor_sensor"] - dict_referencias.get(r["sensor_id"], 0),
-        axis=1
-    )
+    df_final['valor_grafico'] = df_final.groupby('sensor_id')['valor_sensor'].transform(lambda x: x - x.iloc[0])
     label_y = "Variação Relativa"
 else:
-    df_final["valor_grafico"] = df_final["valor_sensor"]
+    df_final['valor_grafico'] = df_final['valor_sensor']
     label_y = "Valor Absoluto"
 
 # ======================================================
 # GRÁFICO
 # ======================================================
-df_final["serie"] = df_final["device_name"] + " | " + df_final["tipo_sensor"]
+df_final['serie'] = df_final['device_name'] + ' | ' + df_final['tipo_sensor']
 
 fig = px.line(
     df_final,
@@ -260,6 +233,7 @@ fig = px.line(
 
 fig.update_xaxes(
     title_text="",
+    tickformat="%d/%m\n%H:%M",
     tickfont=dict(size=17),
     showspikes=True,
     spikemode="across",
@@ -268,25 +242,18 @@ fig.update_xaxes(
 
 fig.update_yaxes(
     title_text=f"<b>{label_y}</b>",
-    title_font=dict(size=20),
-    tickfont=dict(size=17),
-    showspikes=True,
-    spikemode="across",
-    spikesnap="cursor"
+    tickfont=dict(size=17)
 )
 
 fig.update_layout(
     height=780,
-    hovermode="closest",
     legend=dict(
         orientation="h",
         y=-0.15,
         x=0.5,
         xanchor="center",
-        font=dict(size=17),
         title_text=""
-    ),
-    dragmode="pan"
+    )
 )
 
 st.plotly_chart(fig, use_container_width=True)
@@ -297,23 +264,23 @@ st.plotly_chart(fig, use_container_width=True)
 st.subheader("🛰️ Localização dos Dispositivos")
 
 df_mapa = (
-    df_final[["device_name", "latitude", "longitude", "status"]]
+    df_final[['device_name','latitude','longitude','status']]
     .drop_duplicates()
-    .dropna(subset=["latitude", "longitude"])
+    .dropna(subset=['latitude','longitude'])
 )
 
-df_mapa["cor"] = df_mapa["status"].astype(str).str.lower().apply(
-    lambda x: "#6ee7b7" if x == "online" else "#ef4444"
+df_mapa['cor'] = df_mapa['status'].astype(str).str.lower().apply(
+    lambda x:"#6ee7b7" if x=="online" else "#ef4444"
 )
 
 mapa = go.Figure(go.Scattermapbox(
-    lat=df_mapa["latitude"],
-    lon=df_mapa["longitude"],
+    lat=df_mapa['latitude'],
+    lon=df_mapa['longitude'],
     mode="markers+text",
-    marker=dict(size=20, color=df_mapa["cor"]),
-    text=df_mapa["device_name"],
+    marker=dict(size=20,color=df_mapa['cor']),
+    text=df_mapa['device_name'],
     textposition="top center",
-    textfont=dict(size=18, color="white")
+    textfont=dict(size=18,color="white")
 ))
 
 mapa.update_layout(
@@ -323,11 +290,11 @@ mapa.update_layout(
         style="satellite-streets",
         zoom=12,
         center=dict(
-            lat=df_mapa["latitude"].mean(),
-            lon=df_mapa["longitude"].mean()
+            lat=df_mapa['latitude'].mean(),
+            lon=df_mapa['longitude'].mean()
         )
     ),
-    margin=dict(l=0, r=0, t=0, b=0)
+    margin=dict(l=0,r=0,t=0,b=0)
 )
 
 st.plotly_chart(mapa, use_container_width=True)
@@ -336,16 +303,15 @@ st.plotly_chart(mapa, use_container_width=True)
 # TABELA
 # ======================================================
 st.dataframe(
-    df_final[
-        ["data_leitura", "device_name", "tipo_sensor", "valor_sensor", "valor_grafico"]
-    ],
+    df_final[['data_leitura','device_name','tipo_sensor','valor_sensor','valor_grafico']],
     use_container_width=True
 )
 
 # ======================================================
-# EXPORTAÇÃO CSV
+# DOWNLOAD CSV
 # ======================================================
 csv = df_final.to_csv(index=False).encode("utf-8")
+
 st.download_button(
     "📥 Baixar CSV",
     csv,
