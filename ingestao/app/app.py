@@ -233,7 +233,9 @@ st.sidebar.markdown("### 👥 Contatos de Alerta")
 
 nome_contato = st.sidebar.text_input("Nome do responsável")
 email_contato = st.sidebar.text_input("Email")
-telefone_contato = st.sidebar.text_input("Telefone (com DDD)")
+
+# Campo telefone removido do painel
+telefone_contato = ""
 
 # SMS e WhatsApp removidos da interface
 receber_email = True
