@@ -127,6 +127,7 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     df_tipo = df[df["tipo_sensor"].astype(str).isin(tipos_selecionados)]
 
+    # 🔥 monta status bonito novamente
     df_devices = df_tipo[["device_name", "status"]].drop_duplicates()
     df_devices["status_lower"] = df_devices["status"].astype(str).str.lower()
 
@@ -139,6 +140,7 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     device_label_map = dict(zip(df_devices["label"], df_devices["device_name"]))
 
+    # 👇 volta o filtro principal com status
     device_principal_label = st.selectbox(
         "Selecionar Dispositivo Principal",
         sorted(device_label_map.keys())
@@ -146,6 +148,7 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     device_principal = device_label_map[device_principal_label]
 
+    # 👇 volta adicionar outros devices com status visível
     outros_labels = st.multiselect(
         "Adicionar Outros Dispositivos",
         sorted(device_label_map.keys()),
