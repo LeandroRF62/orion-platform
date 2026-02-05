@@ -217,41 +217,37 @@ st.markdown(f"""
 # ===============================
 df_final["serie"] = df_final["device_name"].astype(str) + " | " + df_final["tipo_sensor"].astype(str)
 
-fig = px.line(
-    df_final,
-    x="data_leitura",
-    y="valor_grafico",
-    color="serie",
-    template="plotly_white"
-)
+fig = go.Figure()
 
-# 🔥 APLICAR CORES FIXAS + TRACEJADO
-for trace in fig.data:
-    tipo = trace.name.split("|")[-1].strip()
+for serie in df_final["serie"].unique():
 
-    if tipo in CORES_SENSOR:
-        trace.line.color = CORES_SENSOR[tipo]
+    d = df_final[df_final["serie"] == serie]
+    tipo = d["tipo_sensor"].iloc[0]
 
-    if tipo in ["Device Temperature", "Air Temperature"]:
-        trace.line.dash = "dash"
+    eixo_secundario = tipo in ["Device Temperature", "Air Temperature"]
 
-fig.update_traces(
-    hovertemplate=
-    "<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>" +
-    "%{fullData.name}<br>" +
-    "Valor: %{y:.4f}<extra></extra>"
-)
-
-fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikethickness=1)
-fig.update_yaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikethickness=1)
+    fig.add_trace(go.Scatter(
+        x=d["data_leitura"],
+        y=d["valor_grafico"],
+        mode="lines",
+        name=serie,
+        yaxis="y2" if eixo_secundario else "y",
+        line=dict(
+            color=CORES_SENSOR.get(tipo, "#000000"),
+            dash="dash" if eixo_secundario else "solid"
+        ),
+        hovertemplate=
+        "<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>" +
+        "%{fullData.name}<br>" +
+        "Valor: %{y:.4f}<extra></extra>"
+    ))
 
 label_y = "Valor Absoluto" if modo_escala == "Absoluta" else "Δ Valor Relativo"
 
-fig.update_xaxes(title_text="")
-fig.update_yaxes(title_text=f"<b>{label_y}</b>")
-
 fig.update_layout(
     height=780,
+    hovermode="x unified",
+    dragmode="pan",
     legend=dict(
         orientation="h",
         y=-0.15,
@@ -259,7 +255,28 @@ fig.update_layout(
         xanchor="center",
         title_text=""
     ),
-    dragmode="pan"
+    yaxis=dict(
+        title=f"<b>{label_y}</b>"
+    ),
+    yaxis2=dict(
+        title="<b>Temperatura (°C)</b>",
+        overlaying="y",
+        side="right"
+    )
+)
+
+fig.update_xaxes(
+    showspikes=True,
+    spikemode="across",
+    spikesnap="cursor",
+    spikethickness=1
+)
+
+fig.update_yaxes(
+    showspikes=True,
+    spikemode="across",
+    spikesnap="cursor",
+    spikethickness=1
 )
 
 st.plotly_chart(
@@ -271,6 +288,7 @@ st.plotly_chart(
         "displaylogo": False
     }
 )
+
 
 # ======================================================
 # 🛰️ MAPA
