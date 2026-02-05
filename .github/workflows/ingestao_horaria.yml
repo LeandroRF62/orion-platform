@@ -2,7 +2,7 @@ name: Ingestão Orion (1h)
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 */3 * * *"
   workflow_dispatch:
 
 concurrency:
