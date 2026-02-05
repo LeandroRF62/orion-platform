@@ -100,7 +100,7 @@ df["data_leitura"] = pd.to_datetime(df["data_leitura"]).dt.tz_localize(None)
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
 # ======================================================
-# 🎛️ DISPOSITIVO (EXPANDER)
+# 🎛️ DISPOSITIVO
 # ======================================================
 with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
@@ -144,7 +144,7 @@ devices_selecionados = list(dict.fromkeys(
 df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
 
 # ======================================================
-# 📅 PERÍODO (EXPANDER)
+# 📅 PERÍODO
 # ======================================================
 with st.sidebar.expander("📅 Período de Análise", expanded=False):
 
@@ -161,7 +161,7 @@ df_final = df_final[
 ]
 
 # ======================================================
-# ⚙️ VISUALIZAÇÃO (ESCALA PROFISSIONAL)
+# ⚙️ ESCALA PROFISSIONAL
 # ======================================================
 with st.sidebar.expander("⚙️ Visualização", expanded=False):
 
@@ -173,20 +173,16 @@ with st.sidebar.expander("⚙️ Visualização", expanded=False):
 df_final["valor_grafico"]=df_final["valor_sensor"]
 
 if modo_escala=="Relativa (primeiro valor = zero)":
-
     refs = (
         df_final.sort_values("data_leitura")
         .groupby("sensor_id")["valor_sensor"]
         .first()
     )
-
     df_final["valor_grafico"]=df_final["valor_sensor"]-df_final["sensor_id"].map(refs)
 
 elif modo_escala=="Relativa manual":
-
     sensores_lista=sorted(df_final["sensor_id"].unique())
     referencia_manual={}
-
     for sid in sensores_lista:
         referencia_manual[sid]=st.sidebar.number_input(
             f"Ref Sensor {sid}",
@@ -194,7 +190,6 @@ elif modo_escala=="Relativa manual":
             step=0.01,
             key=f"ref_{sid}"
         )
-
     df_final["valor_grafico"]=df_final.apply(
         lambda row: row["valor_sensor"]-referencia_manual.get(row["sensor_id"],0),
         axis=1
@@ -230,16 +225,6 @@ fig=px.line(
     template="plotly_white"
 )
 
-if not limites_existentes.empty:
-    for _,alerta in limites_existentes.iterrows():
-        if alerta["mostrar_linha"]:
-            fig.add_hline(
-                y=alerta["limite_valor"],
-                line_dash="dash",
-                annotation_text=alerta["mensagem"],
-                annotation_position="top left"
-            )
-
 fig.update_layout(
     height=780,
     legend=dict(
@@ -253,7 +238,7 @@ fig.update_layout(
 st.plotly_chart(fig,use_container_width=True,config={"scrollZoom":True})
 
 # ======================================================
-# 🛰️ MAPA RESTAURADO (NÃO REMOVE NADA DO ORION)
+# 🛰️ MAPA RESTAURADO
 # ======================================================
 st.subheader("🛰️ Localização dos Dispositivos")
 
@@ -291,11 +276,7 @@ mapa.update_layout(
     margin=dict(l=0,r=0,t=0,b=0)
 )
 
-st.plotly_chart(
-    mapa,
-    use_container_width=True,
-    config={"scrollZoom":True}
-)
+st.plotly_chart(mapa,use_container_width=True,config={"scrollZoom":True})
 
 # ======================================================
 # 📋 TABELA + EXPORTAÇÃO CSV
@@ -315,4 +296,3 @@ st.download_button(
     "dados_geotecnicos.csv",
     "text/csv"
 )
-
