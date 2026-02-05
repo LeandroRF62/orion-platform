@@ -1,0 +1,34 @@
+name: Orion Alert Engine
+
+on:
+  schedule:
+    - cron: "*/1 * * * *"   # roda a cada 1 minuto
+  workflow_dispatch:
+
+jobs:
+  run-alert-engine:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install pandas sqlalchemy psycopg2-binary
+
+      - name: Run Alert Engine
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+          EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+        run: |
+          python alert_engine.py
