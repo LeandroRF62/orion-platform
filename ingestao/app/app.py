@@ -196,21 +196,74 @@ if modo_escala == "Relativa (primeiro valor = zero)":
     df_final["valor_grafico"] = df_final["valor_sensor"] - df_final["sensor_id"].map(refs)
 
 # ======================================================
-# HEADER
+# HEADER PROFISSIONAL (ESTILO ORION)
 # ======================================================
 info = df_final.sort_values("data_leitura").iloc[-1]
 
-# status = str(info["status"]).lower()
+status = str(info["status"]).lower()
 bateria = int(info["battery_percentage"]) if pd.notna(info["battery_percentage"]) else 0
 ultima_tx = info["last_upload"]
 
+# 🔥 ajusta horário Brasil
 if pd.notna(ultima_tx):
-    ultima_tx = (ultima_tx - pd.Timedelta(hours=3)).strftime("%d-%m-%Y %H:%M:%S")
+    delta = pd.Timestamp.utcnow() - ultima_tx
+    minutos = int(delta.total_seconds() / 60)
+    texto_tx = f"Last transmission {minutos} minutes ago"
+else:
+    texto_tx = "Sem transmissão"
+
+# 🎨 cores dinâmicas
+cor_status = "#10b981" if status == "online" else "#ef4444"
+
+if bateria >= 75:
+    cor_bateria = "#22c55e"
+elif bateria >= 40:
+    cor_bateria = "#facc15"
+else:
+    cor_bateria = "#ef4444"
 
 st.markdown(f"""
-### {device_principal}
-🟢 Status: {status.upper()} | 🔋 {bateria}% | ⏱ Última transmissão: {ultima_tx}
-""")
+<div style="display:flex;align-items:center;gap:14px;padding:8px 0;">
+
+<h2 style="margin:0;font-weight:700;color:#374151;">
+{device_principal}
+</h2>
+
+<span style="
+background:{cor_status};
+color:white;
+padding:4px 12px;
+border-radius:6px;
+font-weight:600;
+">
+{status.capitalize()}
+</span>
+
+<div style="
+display:flex;
+align-items:center;
+gap:6px;
+background:#dcfce7;
+padding:4px 10px;
+border-radius:6px;
+font-weight:600;
+">
+🔋 {bateria}%
+</div>
+
+<span style="
+color:#f97316;
+font-weight:600;
+display:flex;
+align-items:center;
+gap:6px;
+">
+🕒 {texto_tx}
+</span>
+
+</div>
+""", unsafe_allow_html=True)
+
 
 # ===============================
 # GRÁFICO
