@@ -232,7 +232,7 @@ st.markdown(f"""
 # ===============================
 # GRÁFICO
 # ===============================
-df_final["serie"]=df_final["device_name"]+" | "+df_final["tipo_sensor"]
+df_final["serie"]=df_final["device_name"]+" | "+df_final["tipo_sensor"].astype(str)
 
 fig=px.line(
     df_final,
