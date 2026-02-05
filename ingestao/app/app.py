@@ -1,14 +1,17 @@
+# ===============================
+# IMPORTS
+# ===============================
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 import os
 from dotenv import load_dotenv
 from pathlib import Path
 
 # ===============================
-# AUTENTICAÇÃO
+# AUTH
 # ===============================
 APP_PASSWORD = os.getenv("APP_PASSWORD", "orion123")
 
@@ -28,7 +31,7 @@ if not st.session_state.auth_ok:
     st.stop()
 
 # ===============================
-# LOAD ENV
+# ENV
 # ===============================
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
@@ -36,23 +39,13 @@ load_dotenv(dotenv_path=BASE_DIR / ".env")
 DATABASE_URL = os.getenv("DATABASE_URL")
 MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
 
-if not DATABASE_URL:
-    st.error("DATABASE_URL não configurada")
-    st.stop()
-
 engine = create_engine(DATABASE_URL)
 
-st.set_page_config(
-    page_title="Gestão Geotécnica Orion",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
 # ===============================
-# QUERY BANCO
+# LOAD DATA
 # ===============================
 @st.cache_data(ttl=300)
-def carregar_dados_db():
+def carregar_dados():
     query = """
     SELECT 
         l.data_leitura,
@@ -74,19 +67,14 @@ def carregar_dados_db():
     """
     return pd.read_sql(query, engine)
 
-df = carregar_dados_db()
+df = carregar_dados()
 
 df["data_leitura"] = pd.to_datetime(df["data_leitura"]).dt.tz_localize(None)
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
-if df.empty:
-    st.stop()
-
 # ===============================
-# SIDEBAR FILTROS
+# SIDEBAR DISPOSITIVOS
 # ===============================
-st.sidebar.header("🛠️ Configurações")
-
 df_devices = df[["device_name","status"]].drop_duplicates()
 df_devices["status_lower"] = df_devices["status"].astype(str).str.lower()
 
@@ -106,71 +94,78 @@ device_principal_label = st.sidebar.selectbox(
 
 device_principal = device_label_map[device_principal_label]
 
-df_final = df[df["device_name"]==device_principal].copy()
+outros_labels = st.sidebar.multiselect(
+    "Adicionar Outros Dispositivos",
+    sorted(device_label_map.keys())
+)
+
+devices_selecionados = list(dict.fromkeys(
+    [device_principal]+[device_label_map[l] for l in outros_labels]
+))
+
+df_final = df[df["device_name"].isin(devices_selecionados)].copy()
 
 # ===============================
-# 🚨 LIMITES DE ALERTA (TARPs)
+# HEADER INFO
+# ===============================
+info = df_final.sort_values("data_leitura").iloc[-1]
+
+status = str(info["status"]).lower()
+bateria = int(info["battery_percentage"]) if pd.notna(info["battery_percentage"]) else 0
+ultima_tx = info["last_upload"]
+
+if pd.notna(ultima_tx):
+    ultima_tx = (ultima_tx - pd.Timedelta(hours=3)).strftime("%d-%m-%Y %H:%M:%S")
+
+st.markdown(f"""
+### {device_principal}
+🟢 Status: {status.upper()} | 🔋 {bateria}% | ⏱ Última transmissão: {ultima_tx}
+""")
+
+# ===============================
+# ZERO REFERENCIA
+# ===============================
+modo_escala = st.sidebar.radio(
+    "Escala",
+    ["Absoluta","Relativa"]
+)
+
+if modo_escala=="Relativa":
+    refs = (
+        df_final.sort_values("data_leitura")
+        .groupby("sensor_id")["valor_sensor"]
+        .first()
+    )
+    df_final["valor_grafico"] = df_final["valor_sensor"] - df_final["sensor_id"].map(refs)
+else:
+    df_final["valor_grafico"] = df_final["valor_sensor"]
+
+# ===============================
+# TARPs PANEL
 # ===============================
 st.sidebar.markdown("### 🚨 Limites de Alerta")
 
-tipos_ordenados = sorted(
-    df_final["tipo_sensor"].unique(),
-    key=lambda x: ("A" not in x, x)
-)
-
-device_id_atual = df_final.iloc[-1]["device_id"]
+device_id_atual = info["device_id"]
 
 query_limites = f"""
 SELECT *
 FROM alert_limits
 WHERE device_id = {device_id_atual}
 """
-
 limites_existentes = pd.read_sql(query_limites, engine)
 
-
-novo_alerta_tipo = st.sidebar.selectbox(
-    "Tipo de Sensor",
-    tipos_ordenados
-)
-
-novo_valor = st.sidebar.number_input(
-    "Valor do Limite",
-    value=0.0,
-    step=0.1
-)
-
-mostrar_linha = st.sidebar.checkbox(
-    "Mostrar linha tracejada no gráfico",
-    value=True
-)
-
-mensagem_alerta = st.sidebar.text_input(
-    "Mensagem do alerta",
-    value="Ex: Fazer inspeção imediata"
-)
+novo_valor = st.sidebar.number_input("Valor Limite",0.0)
+mostrar_linha = st.sidebar.checkbox("Mostrar linha",True)
+mensagem_alerta = st.sidebar.text_input("Mensagem","Fazer inspeção")
 
 if st.sidebar.button("➕ Adicionar Alerta"):
 
     with engine.begin() as conn:
-        conn.execute(text("""
-            INSERT INTO alert_limits (
-                device_id,
-                tipo_sensor,
-                limite_valor,
-                mostrar_linha,
-                mensagem
-            )
-            VALUES (:device_id,:tipo,:valor,:mostrar,:mensagem)
-        """),{
-            "device_id":device_id_atual,
-            "tipo":novo_alerta_tipo,
-            "valor":novo_valor,
-            "mostrar":mostrar_linha,
-            "mensagem":mensagem_alerta
-        })
-
-    st.sidebar.success("Alerta criado!")
+        conn.execute(f"""
+            INSERT INTO alert_limits
+            (device_id,limite_valor,mostrar_linha,mensagem)
+            VALUES ({device_id_atual},{novo_valor},{mostrar_linha},'{mensagem_alerta}')
+        """)
 
 # ===============================
 # GRÁFICO
@@ -180,35 +175,19 @@ df_final["serie"]=df_final["device_name"]+" | "+df_final["tipo_sensor"]
 fig=px.line(
     df_final,
     x="data_leitura",
-    y="valor_sensor",
+    y="valor_grafico",
     color="serie",
     template="plotly_white"
 )
 
-fig.update_layout(
-    height=780,
-    legend=dict(
-        orientation="h",
-        y=-0.15,
-        x=0.5,
-        xanchor="center"
-    )
-)
-
-# ===============================
-# DESENHAR LINHAS DE ALERTA
-# ===============================
+# TARPs lines
 if not limites_existentes.empty:
-
     for _,alerta in limites_existentes.iterrows():
-
         if alerta["mostrar_linha"]:
             fig.add_hline(
                 y=alerta["limite_valor"],
                 line_dash="dash",
-                line_width=2,
-                annotation_text=alerta["mensagem"],
-                annotation_position="top left"
+                annotation_text=alerta["mensagem"]
             )
 
 st.plotly_chart(fig,use_container_width=True)
