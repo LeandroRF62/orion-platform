@@ -334,6 +334,76 @@ st.markdown(f"""
 {emoji_tarp} TARP: {nivel_tarp} | 🟢 Status: {status.upper()} | 🔋 {bateria}% | ⏱ Última transmissão: {ultima_tx}
 """)
 
+# ======================================================
+# 📨 ENVIO AUTOMÁTICO DE EMAIL (TRIGGER TARP)
+# ======================================================
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+def enviar_email_alerta(destinatario, assunto, mensagem):
+
+    try:
+        EMAIL_HOST = st.secrets["EMAIL_HOST"]
+        EMAIL_PORT = int(st.secrets["EMAIL_PORT"])
+        EMAIL_USER = st.secrets["EMAIL_USER"]
+        EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
+        EMAIL_FROM = st.secrets["EMAIL_FROM"]
+
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_FROM
+        msg["To"] = destinatario
+        msg["Subject"] = assunto
+
+        msg.attach(MIMEText(mensagem, "plain"))
+
+        servidor = smtplib.SMTP(EMAIL_HOST, EMAIL_PORT)
+        servidor.starttls()
+        servidor.login(EMAIL_USER, EMAIL_PASSWORD)
+        servidor.send_message(msg)
+        servidor.quit()
+
+        return True
+
+    except Exception as e:
+        print("Erro envio email:", e)
+        return False
+
+
+# 🔴 DISPARO AUTOMÁTICO SE TARP VERMELHO
+if nivel_tarp == "Vermelho":
+
+    try:
+        contatos = pd.read_sql(
+            text("""
+                SELECT *
+                FROM alert_contacts
+                WHERE device_id = :device_id
+                AND receber_email = true
+            """),
+            engine,
+            params={"device_id":device_id_atual}
+        )
+
+        for _, contato in contatos.iterrows():
+
+            assunto = f"🚨 ALERTA TARP VERMELHO - {device_principal}"
+
+            mensagem = f"""
+Dispositivo: {device_principal}
+Status TARP: {nivel_tarp}
+
+Valor atual acima do limite configurado.
+
+Acesse o Orion para mais detalhes.
+"""
+
+            enviar_email_alerta(contato["email"], assunto, mensagem)
+
+    except Exception as e:
+        print("Erro trigger email:", e)
+
+
 # ===============================
 # GRÁFICO
 # ===============================
