@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import os
 from dotenv import load_dotenv
 from pathlib import Path
@@ -82,6 +82,7 @@ def carregar_dados_db():
         l.valor_sensor,
         s.sensor_id,
         s.tipo_sensor,
+        s.device_id,
         d.device_name,
         d.latitude,
         d.longitude,
@@ -191,6 +192,47 @@ df_final = df_tipo[
 if df_final.empty:
     st.warning("Nenhum dado no período.")
     st.stop()
+
+# ======================================================
+# 🚨 CONFIGURAÇÃO DE LIMITES DE ALERTA (NOVO)
+# ======================================================
+st.sidebar.markdown("### 🚨 Limites de Alerta")
+
+limites = {}
+
+for tipo in df_final["tipo_sensor"].unique():
+
+    valor = st.sidebar.number_input(
+        f"Limite – {tipo}",
+        value=0.0,
+        step=0.1,
+        key=f"limite_{tipo}"
+    )
+
+    limites[tipo] = valor
+
+if st.sidebar.button("💾 Salvar limites"):
+
+    device_id_atual = df_final.iloc[-1]["device_id"]
+
+    with engine.begin() as conn:
+
+        for tipo, valor in limites.items():
+
+            conn.execute(text("""
+                INSERT INTO alert_limits (
+                    device_id,
+                    tipo_sensor,
+                    limite_valor
+                )
+                VALUES (:device_id,:tipo,:valor)
+            """), {
+                "device_id": device_id_atual,
+                "tipo": tipo,
+                "valor": valor
+            })
+
+    st.sidebar.success("Limites salvos!")
 
 # ===============================
 # ZERO REFERÊNCIA OTIMIZADO
