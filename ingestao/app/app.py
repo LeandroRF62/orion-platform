@@ -218,21 +218,23 @@ label_y = "Valor Absoluto" if modo_escala=="Absoluta" else "Δ Valor Relativo"
 fig.update_layout(
     height=780,
     hovermode="x unified",
-    dragmode="pan",
+
+    # 👇 permite esticar eixo vertical arrastando
+    dragmode="zoom",
+
     legend=dict(orientation="h",y=-0.15,x=0.5,xanchor="center"),
-    yaxis=dict(title=f"<b>{label_y}</b>"),
+    yaxis=dict(
+        title=f"<b>{label_y}</b>",
+        fixedrange=False   # 👈 libera zoom vertical
+    ),
     yaxis2=dict(
         title="<b>Temperatura (°C)</b>",
         overlaying="y",
-        side="right"
+        side="right",
+        fixedrange=False   # 👈 libera zoom vertical temperatura
     )
 )
 
-st.plotly_chart(
-    fig,
-    use_container_width=True,
-    config={"scrollZoom":True}
-)
 
 # ======================================================
 # 🛰️ MAPA
