@@ -146,12 +146,16 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     device_principal = device_label_map[device_principal_label]
 
-    outros_labels = st.multiselect(
-        "Adicionar Outros Dispositivos",
-        sorted(device_label_map.keys()),
-        default=[]
-    )
+    if "outros_labels" not in st.session_state:
+    st.session_state.outros_labels = []
 
+    outros_labels = st.multiselect(
+       "Adicionar Outros Dispositivos",
+       sorted(device_label_map.keys()),
+       default=st.session_state.outros_labels,
+       key="outros_labels"
+    )
+  
 devices_selecionados = list(dict.fromkeys(
     [device_principal] + [device_label_map[l] for l in outros_labels]
 ))
@@ -291,7 +295,22 @@ for serie in df_final["serie"].unique():
     idx = device_index.get(device, 0)
     paleta = PALETA_DEVICES[idx % len(PALETA_DEVICES)]
 
-    cor_final = paleta.get(tipo, CORES_SENSOR.get(tipo, "#000000"))
+    # 🎨 cores únicas por device (incluindo temperatura)
+if tipo == "A-Axis Delta Angle":
+    cor_final = ["#2563eb","#10b981","#06b6d4","#8b5cf6","#f43f5e"][idx % 5]
+
+elif tipo == "B-Axis Delta Angle":
+    cor_final = ["#f97316","#ec4899","#eab308","#22c55e","#0ea5e9"][idx % 5]
+
+elif tipo == "Device Temperature":
+    cor_final = ["#a855f7","#6366f1","#9333ea","#c026d3","#7c3aed"][idx % 5]
+
+elif tipo == "Air Temperature":
+    cor_final = ["#ef4444","#f59e0b","#14b8a6","#fb7185","#e11d48"][idx % 5]
+
+else:
+    cor_final = "#000000"
+
 
     fig.add_trace(go.Scatter(
         x=d["data_leitura"],
