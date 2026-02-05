@@ -8,19 +8,9 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 # ======================================================
-# 🚨 FUNÇÃO DE CLASSIFICAÇÃO TARP (NOVO)
+# 🚨 FUNÇÃO DE CLASSIFICAÇÃO TARP
 # ======================================================
 def classificar_tarp(valor, limites):
-    """
-    valor: valor atual do sensor
-    limites: dict com níveis TARP
-    {
-        "verde":0,
-        "amarelo":5,
-        "laranja":10,
-        "vermelho":20
-    }
-    """
     if valor >= limites.get("vermelho", float("inf")):
         return "Vermelho"
     elif valor >= limites.get("laranja", float("inf")):
@@ -103,7 +93,7 @@ df["data_leitura"] = pd.to_datetime(df["data_leitura"]).dt.tz_localize(None)
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
 # ===============================
-# FILTRO EIXO A/B/AMBOS
+# FILTRO EIXO
 # ===============================
 tipos_selecionados = st.sidebar.multiselect(
     "Variável do Dispositivo",
@@ -148,7 +138,7 @@ devices_selecionados = list(dict.fromkeys(
 df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
 
 # ===============================
-# 📅 FILTRO DE PERÍODO (RESTAURADO)
+# FILTRO PERÍODO
 # ===============================
 st.sidebar.subheader("📅 Período de Análise")
 
@@ -165,7 +155,7 @@ df_final = df_final[
 ]
 
 # ===============================
-# ORDEM CORRETA DOS EIXOS
+# ORDEM DOS EIXOS
 # ===============================
 ordem_series = sorted(
     df_final["tipo_sensor"].astype(str).unique(),
@@ -212,7 +202,6 @@ mostrar_linha = st.sidebar.checkbox("Mostrar linha tracejada no gráfico",value=
 mensagem_alerta = st.sidebar.text_input("Mensagem do alerta",value="Ex: Fazer inspeção")
 
 if st.sidebar.button("➕ Adicionar Alerta"):
-
     with engine.begin() as conn:
         conn.execute(
             text("""
@@ -228,8 +217,40 @@ if st.sidebar.button("➕ Adicionar Alerta"):
                 "mensagem":mensagem_alerta
             }
         )
-
     st.sidebar.success("Alerta criado!")
+
+# ===============================
+# 👥 CONTATOS DE ALERTA
+# ===============================
+st.sidebar.markdown("### 👥 Contatos de Alerta")
+
+nome_contato = st.sidebar.text_input("Nome do responsável")
+email_contato = st.sidebar.text_input("Email")
+telefone_contato = st.sidebar.text_input("Telefone (com DDD)")
+
+receber_email = st.sidebar.checkbox("Receber Email", value=True)
+receber_sms = st.sidebar.checkbox("Receber SMS", value=False)
+receber_whatsapp = st.sidebar.checkbox("Receber WhatsApp", value=False)
+
+if st.sidebar.button("➕ Adicionar Contato"):
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO alert_contacts
+                (device_id,nome,email,telefone,receber_email,receber_sms,receber_whatsapp)
+                VALUES (:device_id,:nome,:email,:telefone,:email_ok,:sms_ok,:wpp_ok)
+            """),
+            {
+                "device_id": device_id_atual,
+                "nome": nome_contato,
+                "email": email_contato,
+                "telefone": telefone_contato,
+                "email_ok": receber_email,
+                "sms_ok": receber_sms,
+                "wpp_ok": receber_whatsapp
+            }
+        )
+    st.sidebar.success("Contato adicionado!")
 
 # ===============================
 # ZERO REFERÊNCIA
@@ -240,7 +261,6 @@ modo_escala = st.sidebar.radio(
 )
 
 if modo_escala=="Relativa":
-
     usar_primeiro_valor = st.sidebar.checkbox(
         "Usar primeiro valor como zero",
         value=True
@@ -256,10 +276,8 @@ if modo_escala=="Relativa":
         refs = {sid:0 for sid in df_final["sensor_id"].unique()}
 
     df_final["valor_grafico"]=df_final["valor_sensor"]-df_final["sensor_id"].map(refs)
-    label_y="Variação Relativa"
 else:
     df_final["valor_grafico"]=df_final["valor_sensor"]
-    label_y="Valor Absoluto"
 
 # ===============================
 # HEADER
