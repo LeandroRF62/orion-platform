@@ -194,45 +194,73 @@ if df_final.empty:
     st.stop()
 
 # ======================================================
-# 🚨 CONFIGURAÇÃO DE LIMITES DE ALERTA (NOVO)
+# 🚨 LIMITES DE ALERTA (TARPs)
 # ======================================================
+
 st.sidebar.markdown("### 🚨 Limites de Alerta")
 
-limites = {}
+# Ordem correta: eixo A primeiro
+tipos_ordenados = sorted(
+    df_final["tipo_sensor"].unique(),
+    key=lambda x: ("A" not in x, x)
+)
 
-for tipo in df_final["tipo_sensor"].unique():
-
-    valor = st.sidebar.number_input(
-        f"Limite – {tipo}",
-        value=0.0,
-        step=0.1,
-        key=f"limite_{tipo}"
+with engine.begin() as conn:
+    limites_existentes = pd.read_sql(
+        text("""
+            SELECT *
+            FROM alert_limits
+            WHERE device_id = :device_id
+        """),
+        conn,
+        params={"device_id": df_final.iloc[-1]["device_id"]}
     )
 
-    limites[tipo] = valor
+novo_alerta_tipo = st.sidebar.selectbox(
+    "Tipo de Sensor",
+    tipos_ordenados
+)
 
-if st.sidebar.button("💾 Salvar limites"):
+novo_valor = st.sidebar.number_input(
+    "Valor do Limite",
+    value=0.0,
+    step=0.1
+)
+
+mostrar_linha = st.sidebar.checkbox(
+    "Mostrar linha tracejada no gráfico",
+    value=True
+)
+
+mensagem_alerta = st.sidebar.text_input(
+    "Mensagem do alerta",
+    value="Ex: Fazer inspeção imediata"
+)
+
+if st.sidebar.button("➕ Adicionar Alerta"):
 
     device_id_atual = df_final.iloc[-1]["device_id"]
 
     with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO alert_limits (
+                device_id,
+                tipo_sensor,
+                limite_valor,
+                mostrar_linha,
+                mensagem
+            )
+            VALUES (:device_id,:tipo,:valor,:mostrar,:mensagem)
+        """), {
+            "device_id": device_id_atual,
+            "tipo": novo_alerta_tipo,
+            "valor": novo_valor,
+            "mostrar": mostrar_linha,
+            "mensagem": mensagem_alerta
+        })
 
-        for tipo, valor in limites.items():
+    st.sidebar.success("Alerta criado!")
 
-            conn.execute(text("""
-                INSERT INTO alert_limits (
-                    device_id,
-                    tipo_sensor,
-                    limite_valor
-                )
-                VALUES (:device_id,:tipo,:valor)
-            """), {
-                "device_id": device_id_atual,
-                "tipo": tipo,
-                "valor": valor
-            })
-
-    st.sidebar.success("Limites salvos!")
 
 # ===============================
 # ZERO REFERÊNCIA OTIMIZADO
@@ -346,6 +374,38 @@ fig.update_yaxes(
     spikemode="across",
     spikesnap="cursor"
 )
+
+# ======================================================
+# DESENHAR LINHAS DE ALERTA (TARPs)
+# ======================================================
+
+from sqlalchemy import text
+
+with engine.begin() as conn:
+    limites_existentes = pd.read_sql(
+        text("""
+            SELECT *
+            FROM alert_limits
+            WHERE device_id = :device_id
+        """),
+        conn,
+        params={"device_id": df_final.iloc[-1]["device_id"]}
+    )
+
+if not limites_existentes.empty:
+
+    for _, alerta in limites_existentes.iterrows():
+
+        if alerta["mostrar_linha"]:
+
+            fig.add_hline(
+                y=alerta["limite_valor"],
+                line_dash="dash",
+                line_width=2,
+                annotation_text=alerta["mensagem"],
+                annotation_position="top left"
+            )
+
 
 st.plotly_chart(
     fig,
