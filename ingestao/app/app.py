@@ -20,6 +20,16 @@ def classificar_tarp(valor, limites):
         return "Verde"
 
 # ===============================
+# 🎨 CORES FIXAS PROFISSIONAIS
+# ===============================
+CORES_SENSOR = {
+    "A-Axis Delta Angle": "#2563eb",   # Azul
+    "B-Axis Delta Angle": "#f97316",   # Laranja
+    "Device Temperature": "#ef4444",   # Vermelho
+    "Air Temperature": "#a855f7"       # Roxo
+}
+
+# ===============================
 # AUTENTICAÇÃO
 # ===============================
 APP_PASSWORD = os.getenv("APP_PASSWORD", "orion123")
@@ -57,7 +67,7 @@ st.set_page_config(
 )
 
 # ===============================
-# QUERY BANCO (🔥 AGORA COM TEMPERATURA)
+# QUERY BANCO
 # ===============================
 @st.cache_data(ttl=300)
 def carregar_dados_db():
@@ -138,7 +148,6 @@ modo_escala = st.sidebar.radio(
 
 df_final["valor_grafico"]=df_final["valor_sensor"]
 
-# aplicar escala apenas nos eixos A/B
 mask_inclin = df_final["tipo_sensor"].isin(["A-Axis Delta Angle","B-Axis Delta Angle"])
 
 if modo_escala=="Relativa (primeiro valor = zero)":
@@ -162,7 +171,7 @@ st.markdown(f"""
 """)
 
 # ======================================================
-# 🔥 GRÁFICO COM EIXO SECUNDÁRIO DE TEMPERATURA
+# 🔥 GRÁFICO PROFISSIONAL (CORES + TRACEJADO)
 # ======================================================
 df_final["serie"]=df_final["device_name"]+" | "+df_final["tipo_sensor"]
 
@@ -171,25 +180,37 @@ df_inclin = df_final[~df_final["tipo_sensor"].isin(["Device Temperature","Air Te
 
 fig = go.Figure()
 
-# eixo principal (inclinação)
+# 🔵 Inclinação (linhas sólidas)
+for _,row in df_inclin.iterrows():
+    pass
+
 for serie in df_inclin["serie"].unique():
     d=df_inclin[df_inclin["serie"]==serie]
-    fig.add_trace(go.Scatter(
-        x=d["data_leitura"],
-        y=d["valor_grafico"],
-        mode="lines",
-        name=serie
-    ))
+    tipo=d["tipo_sensor"].iloc[0]
 
-# eixo secundário (temperatura)
-for serie in df_temp["serie"].unique():
-    d=df_temp[df_temp["serie"]==serie]
     fig.add_trace(go.Scatter(
         x=d["data_leitura"],
         y=d["valor_grafico"],
         mode="lines",
         name=serie,
-        yaxis="y2"
+        line=dict(color=CORES_SENSOR.get(tipo,"#000000"))
+    ))
+
+# 🌡️ Temperatura (linhas tracejadas)
+for serie in df_temp["serie"].unique():
+    d=df_temp[df_temp["serie"]==serie]
+    tipo=d["tipo_sensor"].iloc[0]
+
+    fig.add_trace(go.Scatter(
+        x=d["data_leitura"],
+        y=d["valor_grafico"],
+        mode="lines",
+        name=serie,
+        yaxis="y2",
+        line=dict(
+            color=CORES_SENSOR.get(tipo,"#000000"),
+            dash="dash"  # 👈 TRACEJADO
+        )
     ))
 
 label_y = "Valor Absoluto" if modo_escala=="Absoluta" else "Δ Valor Relativo"
