@@ -235,9 +235,10 @@ nome_contato = st.sidebar.text_input("Nome do responsável")
 email_contato = st.sidebar.text_input("Email")
 telefone_contato = st.sidebar.text_input("Telefone (com DDD)")
 
-receber_email = st.sidebar.checkbox("Receber Email", value=True)
-receber_sms = st.sidebar.checkbox("Receber SMS", value=False)
-receber_whatsapp = st.sidebar.checkbox("Receber WhatsApp", value=False)
+# SMS e WhatsApp removidos da interface
+receber_email = True
+receber_sms = False
+receber_whatsapp = False
 
 if st.sidebar.button("➕ Adicionar Contato"):
     with engine.begin() as conn:
