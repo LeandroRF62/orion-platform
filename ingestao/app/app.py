@@ -36,7 +36,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 # ======================================================
-# CONEXÃO COM BANCO (🔥 melhoria estabilidade cloud)
+# CONEXÃO COM BANCO
 # ======================================================
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -85,13 +85,14 @@ if st.sidebar.button("🔄 Atualizar dados"):
     st.rerun()
 
 # ======================================================
-# QUERY OTIMIZADA PROFISSIONAL (🔥)
+# QUERY OTIMIZADA PROFISSIONAL
 # ======================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def carregar_dados_db():
+
     query = """
     SELECT 
-        l.data_leitura AT TIME ZONE 'UTC' AS data_leitura,
+        l.data_leitura,
         l.valor_sensor,
         s.sensor_id,
         s.tipo_sensor,
@@ -99,8 +100,8 @@ def carregar_dados_db():
         d.latitude,
         d.longitude,
         LOWER(d.status) AS status,
-        d.battery_percent,
-        d.last_upload AT TIME ZONE 'UTC' AS last_upload
+        d.battery_percentage,
+        d.last_upload
     FROM leituras l
     JOIN sensores s ON l.sensor_id = s.sensor_id
     JOIN devices d ON s.device_id = d.device_id
@@ -109,12 +110,16 @@ def carregar_dados_db():
         AND l.data_leitura >= NOW() - INTERVAL '30 days'
     ORDER BY l.data_leitura ASC
     """
-    return pd.read_sql_query(query, engine)
+
+    with engine.connect() as conn:
+        df = pd.read_sql(query, conn)
+
+    return df
 
 df = carregar_dados_db()
 
 # ======================================================
-# NORMALIZAÇÃO (🔥 menos processamento)
+# NORMALIZAÇÃO
 # ======================================================
 df['data_leitura'] = pd.to_datetime(df['data_leitura'], errors='coerce')
 
