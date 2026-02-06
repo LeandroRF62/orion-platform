@@ -73,7 +73,7 @@ def obter_token():
     return r.json()["token"]
 
 # ======================================================
-# SYNC STATE (checkpoint por sensor)
+# SYNC STATE
 # ======================================================
 def carregar_sync_state():
 
@@ -104,7 +104,7 @@ def carregar_sync_state():
     return mapa
 
 # ======================================================
-# DEVICES E SENSORES
+# DEVICES E SENSORES (🔥 ATUALIZADO)
 # ======================================================
 def cadastrar_devices_e_sensores(token):
 
@@ -121,8 +121,15 @@ def cadastrar_devices_e_sensores(token):
     r.raise_for_status()
 
     sensor_ids = []
+    device_last_upload = {}
+    sensor_to_device = {}
 
     for device in r.json():
+
+        device_id = device["deviceId"]
+        last_upload = device.get("lastUpload")
+
+        device_last_upload[device_id] = last_upload
 
         cur.execute("""
             INSERT INTO devices (
@@ -138,24 +145,26 @@ def cadastrar_devices_e_sensores(token):
                 last_upload = EXCLUDED.last_upload,
                 battery_percentage = EXCLUDED.battery_percentage;
         """, (
-            device["deviceId"],
+            device_id,
             device["deviceName"],
             device.get("serialNumber"),
             device.get("status"),
             device.get("latitude"),
             device.get("longitude"),
-            device.get("lastUpload"),
+            last_upload,
             device.get("batteryPercentage")
         ))
 
         processar_alertas_status(
             conn,
-            device["deviceId"],
+            device_id,
             device.get("status")
         )
 
         for sensor in device.get("sensors", []):
-            sensor_ids.append(sensor["sensorId"])
+            sid = sensor["sensorId"]
+            sensor_ids.append(sid)
+            sensor_to_device[sid] = device_id
 
     conn.commit()
     cur.close()
@@ -163,10 +172,10 @@ def cadastrar_devices_e_sensores(token):
 
     print(f"✅ Sensores encontrados: {len(sensor_ids)}")
 
-    return sorted(set(sensor_ids))
+    return sorted(set(sensor_ids)), device_last_upload, sensor_to_device
 
 # ======================================================
-# WORKER POR SENSOR (🔥 PAGINAÇÃO CORRETA)
+# WORKER SENSOR
 # ======================================================
 def worker_sensor(token, sensor_id, inicio, fim):
 
@@ -241,13 +250,33 @@ def worker_sensor(token, sensor_id, inicio, fim):
     return total_local
 
 # ======================================================
-# INGESTÃO COSMIC
+# INGESTÃO INTELIGENTE (🔥 ATUALIZADO)
 # ======================================================
-def baixar_e_salvar_leituras(token, sensor_ids):
+def baixar_e_salvar_leituras(token, sensor_ids, device_last_upload, sensor_to_device):
 
     sync_map = carregar_sync_state()
 
     agora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+    sensores_para_baixar = []
+
+    for sid in sensor_ids:
+
+        device_id = sensor_to_device.get(sid)
+        last_upload_device = device_last_upload.get(device_id)
+        last_sync_sensor = sync_map.get(sid)
+
+        if not last_upload_device:
+            continue
+
+        if not last_sync_sensor:
+            sensores_para_baixar.append(sid)
+            continue
+
+        if last_upload_device > last_sync_sensor:
+            sensores_para_baixar.append(sid)
+
+    print(f"🚀 Sensores realmente necessários: {len(sensores_para_baixar)}")
 
     total = 0
 
@@ -255,7 +284,7 @@ def baixar_e_salvar_leituras(token, sensor_ids):
 
         futures = []
 
-        for sensor_id in sensor_ids:
+        for sensor_id in sensores_para_baixar:
 
             inicio = sync_map.get(sensor_id, DATA_INICIAL_HISTORICO)
 
@@ -282,8 +311,13 @@ if __name__ == "__main__":
 
     token = obter_token()
 
-    sensor_ids = cadastrar_devices_e_sensores(token)
+    sensor_ids, device_last_upload, sensor_to_device = cadastrar_devices_e_sensores(token)
 
-    baixar_e_salvar_leituras(token, sensor_ids)
+    baixar_e_salvar_leituras(
+        token,
+        sensor_ids,
+        device_last_upload,
+        sensor_to_device
+    )
 
     print("\n🏁 FINALIZADO")
