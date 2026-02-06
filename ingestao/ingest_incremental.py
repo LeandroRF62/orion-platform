@@ -124,7 +124,7 @@ def cadastrar_devices_e_sensores(token):
 
     for device in r.json():
 
-        # 🔥 DEVICE COMPLETO
+        # 🔥 INSERT DEVICE
         cur.execute("""
             INSERT INTO devices (
                 device_id, device_name, serial_number, status,
@@ -155,7 +155,7 @@ def cadastrar_devices_e_sensores(token):
             device.get("status")
         )
 
-        # 🔥 FILTRO CANAIS 1,2,3 (corrigido)
+        # 🔥 INSERT SENSORES (CANAIS 1,2,3)
         for sensor in device.get("sensors", []):
 
             channel_number = str(sensor.get("channelNumber")).strip()
@@ -163,7 +163,30 @@ def cadastrar_devices_e_sensores(token):
             if channel_number not in ("1", "2", "3"):
                 continue
 
-            sensor_ids.append(sensor["sensorId"])
+            sensor_id = sensor["sensorId"]
+            sensor_ids.append(sensor_id)
+
+            cur.execute("""
+                INSERT INTO sensores (
+                    sensor_id,
+                    device_id,
+                    nome_customizado,
+                    tipo_sensor,
+                    unidade_medida
+                )
+                VALUES (%s,%s,%s,%s,%s)
+                ON CONFLICT (sensor_id) DO UPDATE SET
+                    device_id = EXCLUDED.device_id,
+                    nome_customizado = EXCLUDED.nome_customizado,
+                    tipo_sensor = EXCLUDED.tipo_sensor,
+                    unidade_medida = EXCLUDED.unidade_medida;
+            """, (
+                sensor_id,
+                device["deviceId"],
+                sensor.get("customName") or f"Sensor {sensor_id}",
+                sensor.get("sensorType"),
+                sensor.get("uom")
+            ))
 
     conn.commit()
     cur.close()
@@ -174,7 +197,7 @@ def cadastrar_devices_e_sensores(token):
     return sorted(set(sensor_ids))
 
 # ======================================================
-# WORKER POR SENSOR
+# WORKER SENSOR
 # ======================================================
 def worker_sensor(token, sensor_id, inicio, fim):
 
