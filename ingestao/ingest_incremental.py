@@ -73,7 +73,7 @@ def obter_token():
     return r.json()["token"]
 
 # ======================================================
-# SYNC STATE (checkpoint incremental)
+# SYNC STATE
 # ======================================================
 def carregar_sync_state():
 
@@ -105,7 +105,6 @@ def carregar_sync_state():
 
 # ======================================================
 # DEVICES E SENSORES
-# Mantém device completo, filtra canais 1,2,3
 # ======================================================
 def cadastrar_devices_e_sensores(token):
 
@@ -125,7 +124,7 @@ def cadastrar_devices_e_sensores(token):
 
     for device in r.json():
 
-        # 🔥 DEVICE COMPLETO (não muda nada aqui)
+        # 🔥 DEVICE COMPLETO
         cur.execute("""
             INSERT INTO devices (
                 device_id, device_name, serial_number, status,
@@ -156,15 +155,13 @@ def cadastrar_devices_e_sensores(token):
             device.get("status")
         )
 
-        # 🔥 SOMENTE CANAIS 1,2,3 (tiltímetro)
+        # 🔥 FILTRO CANAIS 1,2,3 (corrigido)
         for sensor in device.get("sensors", []):
 
-            channel_number = sensor.get("channelNumber")
+            channel_number = str(sensor.get("channelNumber")).strip()
 
-            # 🔥 canais válidos do tiltímetro
             if channel_number not in ("1", "2", "3"):
-            continue
-
+                continue
 
             sensor_ids.append(sensor["sensorId"])
 
@@ -177,7 +174,7 @@ def cadastrar_devices_e_sensores(token):
     return sorted(set(sensor_ids))
 
 # ======================================================
-# WORKER POR SENSOR (paginação segura)
+# WORKER POR SENSOR
 # ======================================================
 def worker_sensor(token, sensor_id, inicio, fim):
 
@@ -252,7 +249,7 @@ def worker_sensor(token, sensor_id, inicio, fim):
     return total_local
 
 # ======================================================
-# INGESTÃO COSMIC
+# INGESTÃO
 # ======================================================
 def baixar_e_salvar_leituras(token, sensor_ids):
 
