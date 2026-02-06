@@ -6,26 +6,25 @@ from datetime import datetime, timedelta, timezone
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from alert_engine import processar_alertas_status
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 # ======================================================
-# CONFIGURAÇÕES GERAIS
+# CONFIGURAÇÕES
 # ======================================================
-API_KEY = "QLClykq5tBlhO9ebP5PLDzKvYkyo2p3LlTVhqPxirRY="
+API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://api.oriondata.io/api"
-
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-MODO_HISTORICO = True
 DATA_INICIAL_HISTORICO = "2026-01-25T00:00:00"
-JANELA_HORAS = 1
 
 BACKFILL_EM_BLOCOS = True
 BLOCO_DIAS = 7
 
 REQUEST_TIMEOUT = 30
 SENSOR_BATCH_SIZE = 50
-SLEEP_BETWEEN_CALLS = 0.3
+SLEEP_BETWEEN_CALLS = 0.1
+MAX_WORKERS = 5
 
 # ======================================================
 # SESSION COM RETRY
@@ -44,18 +43,44 @@ session.mount("https://", adapter)
 # TOKEN
 # ======================================================
 def obter_token():
+    print("🔐 Obtendo token...")
     r = session.get(
         f"{BASE_URL}/token",
         params={"apiKey": API_KEY},
         timeout=REQUEST_TIMEOUT
     )
     r.raise_for_status()
+    print("✅ Token obtido")
     return r.json()["token"]
+
+# ======================================================
+# DESCOBRIR ÚLTIMO TIMESTAMP
+# ======================================================
+def obter_ultimo_timestamp(conn):
+
+    cur = conn.cursor()
+    cur.execute("SELECT MAX(data_leitura) FROM leituras;")
+    resultado = cur.fetchone()[0]
+    cur.close()
+
+    if resultado:
+        ultimo = resultado - timedelta(minutes=5)
+
+        print(f"🧠 Último timestamp no banco: {resultado}")
+        print(f"▶️ Reiniciando a partir de: {ultimo}")
+
+        return ultimo.strftime("%Y-%m-%dT%H:%M:%S")
+
+    else:
+        print("⚠️ Banco vazio. Usando DATA_INICIAL_HISTORICO")
+        return DATA_INICIAL_HISTORICO
 
 # ======================================================
 # DEVICES E SENSORES
 # ======================================================
 def cadastrar_devices_e_sensores(token, conn):
+
+    print("📡 Atualizando devices e sensores...")
 
     r = session.get(
         f"{BASE_URL}/UserDevices",
@@ -69,9 +94,6 @@ def cadastrar_devices_e_sensores(token, conn):
 
     for device in r.json():
 
-        # ======================================================
-        # INSERT DEVICE
-        # ======================================================
         cur.execute("""
             INSERT INTO devices (
                 device_id, device_name, serial_number, status,
@@ -96,18 +118,12 @@ def cadastrar_devices_e_sensores(token, conn):
             device.get("batteryPercentage")
         ))
 
-        # ======================================================
-        # 🔥 ALERTA DE MUDANÇA DE STATUS
-        # ======================================================
         processar_alertas_status(
             conn,
             device["deviceId"],
             device.get("status")
         )
 
-        # ======================================================
-        # SENSORES
-        # ======================================================
         for sensor in device.get("sensors", []):
             sensor_ids.append(sensor["sensorId"])
 
@@ -133,10 +149,12 @@ def cadastrar_devices_e_sensores(token, conn):
     conn.commit()
     cur.close()
 
+    print(f"✅ Sensores encontrados: {len(sensor_ids)}")
+
     return sorted(set(sensor_ids))
 
 # ======================================================
-# GERADOR DE BLOCOS DE TEMPO
+# GERADOR DE BLOCOS
 # ======================================================
 def gerar_blocos_tempo(data_inicio_str, data_fim_dt, dias_bloco):
 
@@ -153,69 +171,86 @@ def gerar_blocos_tempo(data_inicio_str, data_fim_dt, dias_bloco):
         inicio = fim
 
 # ======================================================
-# JANELA TEMPO REAL
+# DOWNLOAD PARALELO
 # ======================================================
-def calcular_janela_tempo():
-    agora = datetime.now(timezone.utc)
-    data_fim = agora.strftime("%Y-%m-%dT%H:%M:%S")
-    data_inicio = (agora - timedelta(hours=JANELA_HORAS)).strftime("%Y-%m-%dT%H:%M:%S")
-    return data_inicio, data_fim
+def baixar_lote(token, data_inicio, data_fim, lote):
+
+    headers = {"Authorization": f"Bearer {token}"}
+    sensor_param = ",".join(map(str, lote))
+    offset = 0
+    registros_total = []
+
+    while True:
+
+        r = session.get(
+            f"{BASE_URL}/SensorData",
+            headers=headers,
+            params={
+                "version": "1.3",
+                "startDate": data_inicio,
+                "endDate": data_fim,
+                "offset": offset,
+                "sensorIds": sensor_param
+            },
+            timeout=REQUEST_TIMEOUT
+        )
+
+        r.raise_for_status()
+        dados = r.json()
+
+        if not dados:
+            break
+
+        registros_total.extend([
+            (d["sensorId"], d["readingDate"], d["sensorValue"])
+            for d in dados
+        ])
+
+        offset += len(dados)
+        time.sleep(SLEEP_BETWEEN_CALLS)
+
+    return registros_total
 
 # ======================================================
-# INGESTÃO PRINCIPAL
+# INGESTÃO TURBO COM TIMESTAMP AUTOMÁTICO
 # ======================================================
 def baixar_e_salvar_leituras(token, sensor_ids, conn):
 
-    headers = {"Authorization": f"Bearer {token}"}
     cur = conn.cursor()
-
     agora = datetime.now(timezone.utc)
 
-    if MODO_HISTORICO and BACKFILL_EM_BLOCOS:
-        janelas = list(
-            gerar_blocos_tempo(DATA_INICIAL_HISTORICO, agora, BLOCO_DIAS)
-        )
-    else:
-        janelas = [calcular_janela_tempo()]
+    data_inicio_auto = obter_ultimo_timestamp(conn)
+
+    janelas = list(
+        gerar_blocos_tempo(data_inicio_auto, agora, BLOCO_DIAS)
+    )
 
     print(f"🧱 Total de blocos: {len(janelas)}")
+
+    total_registros = 0
 
     for idx, (data_inicio, data_fim) in enumerate(janelas, start=1):
 
         print(f"\n🧱 Bloco {idx}/{len(janelas)} | {data_inicio} → {data_fim}")
 
-        for i in range(0, len(sensor_ids), SENSOR_BATCH_SIZE):
+        lotes = [
+            sensor_ids[i:i + SENSOR_BATCH_SIZE]
+            for i in range(0, len(sensor_ids), SENSOR_BATCH_SIZE)
+        ]
 
-            lote = sensor_ids[i:i + SENSOR_BATCH_SIZE]
-            sensor_param = ",".join(map(str, lote))
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
 
-            offset = 0
+            futures = [
+                executor.submit(baixar_lote, token, data_inicio, data_fim, lote)
+                for lote in lotes
+            ]
 
-            while True:
+            for future in as_completed(futures):
 
-                r = session.get(
-                    f"{BASE_URL}/SensorData",
-                    headers=headers,
-                    params={
-                        "version": "1.3",
-                        "startDate": data_inicio,
-                        "endDate": data_fim,
-                        "offset": offset,
-                        "sensorIds": sensor_param
-                    },
-                    timeout=REQUEST_TIMEOUT
-                )
+                registros = future.result()
 
-                r.raise_for_status()
-                dados = r.json()
-
-                if not dados:
-                    break
-
-                registros = [
-                    (d["sensorId"], d["readingDate"], d["sensorValue"])
-                    for d in dados
-                ]
+                if not registros:
+                    continue
 
                 execute_batch(cur, """
                     INSERT INTO leituras (
@@ -225,12 +260,13 @@ def baixar_e_salvar_leituras(token, sensor_ids, conn):
                     )
                     VALUES (%s,%s,%s)
                     ON CONFLICT (sensor_id, data_leitura) DO NOTHING
-                """, registros, page_size=500)
+                """, registros, page_size=1000)
 
                 conn.commit()
 
-                offset += 1
-                time.sleep(SLEEP_BETWEEN_CALLS)
+                total_registros += len(registros)
+
+                print(f"📥 Inseridos agora: {len(registros)} | Total geral: {total_registros}")
 
     cur.close()
 
@@ -239,7 +275,7 @@ def baixar_e_salvar_leituras(token, sensor_ids, conn):
 # ======================================================
 if __name__ == "__main__":
 
-    print("🚀 Iniciando sincronização")
+    print("🚀 Iniciando sincronização ORION TURBO")
 
     conn = psycopg2.connect(DATABASE_URL)
 
