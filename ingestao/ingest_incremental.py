@@ -2,15 +2,17 @@ import os
 import requests
 import psycopg2
 from psycopg2.extras import execute_batch
+from psycopg2.pool import SimpleConnectionPool
 from datetime import datetime, timedelta, timezone
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from alert_engine import processar_alertas_status
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import time
 
 # ======================================================
-# CONFIGURAÇÕES
+# CONFIG
 # ======================================================
 API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://api.oriondata.io/api"
@@ -18,26 +20,44 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 DATA_INICIAL_HISTORICO = "2026-01-25T00:00:00"
 
-BACKFILL_EM_BLOCOS = True
-BLOCO_DIAS = 7
-
 REQUEST_TIMEOUT = 30
 SENSOR_BATCH_SIZE = 50
-SLEEP_BETWEEN_CALLS = 0.1
-MAX_WORKERS = 5
+MAX_WORKERS = 8
+SLEEP_BETWEEN_CALLS = 0.03
 
 # ======================================================
-# SESSION COM RETRY
+# HTTP SESSION GLOBAL
 # ======================================================
 session = requests.Session()
+
 retries = Retry(
     total=5,
     backoff_factor=1,
     status_forcelist=[429, 500, 502, 503, 504],
     allowed_methods=["GET"]
 )
+
 adapter = HTTPAdapter(max_retries=retries)
 session.mount("https://", adapter)
+
+# ======================================================
+# CONNECTION POOL (🔥 DIFERENCIAL)
+# ======================================================
+db_pool = SimpleConnectionPool(
+    minconn=1,
+    maxconn=MAX_WORKERS + 2,
+    dsn=DATABASE_URL
+)
+
+pool_lock = threading.Lock()
+
+def get_conn():
+    with pool_lock:
+        return db_pool.getconn()
+
+def release_conn(conn):
+    with pool_lock:
+        db_pool.putconn(conn)
 
 # ======================================================
 # TOKEN
@@ -54,33 +74,43 @@ def obter_token():
     return r.json()["token"]
 
 # ======================================================
-# DESCOBRIR ÚLTIMO TIMESTAMP
+# SYNC STATE
 # ======================================================
-def obter_ultimo_timestamp(conn):
+def carregar_sync_state():
 
+    conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT MAX(data_leitura) FROM leituras;")
-    resultado = cur.fetchone()[0]
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sync_state (
+            sensor_id BIGINT PRIMARY KEY,
+            last_timestamp TIMESTAMP
+        );
+    """)
+
+    cur.execute("SELECT sensor_id, last_timestamp FROM sync_state;")
+    dados = cur.fetchall()
+
     cur.close()
+    release_conn(conn)
 
-    if resultado:
-        ultimo = resultado - timedelta(minutes=5)
+    mapa = {}
 
-        print(f"🧠 Último timestamp no banco: {resultado}")
-        print(f"▶️ Reiniciando a partir de: {ultimo}")
+    for sid, ts in dados:
+        if ts:
+            mapa[sid] = (ts - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
 
-        return ultimo.strftime("%Y-%m-%dT%H:%M:%S")
+    print(f"🧠 Sync_state carregado: {len(mapa)} sensores")
 
-    else:
-        print("⚠️ Banco vazio. Usando DATA_INICIAL_HISTORICO")
-        return DATA_INICIAL_HISTORICO
+    return mapa
 
 # ======================================================
-# DEVICES E SENSORES
+# DEVICES
 # ======================================================
-def cadastrar_devices_e_sensores(token, conn):
+def cadastrar_devices_e_sensores(token):
 
-    print("📡 Atualizando devices e sensores...")
+    conn = get_conn()
+    cur = conn.cursor()
 
     r = session.get(
         f"{BASE_URL}/UserDevices",
@@ -89,7 +119,6 @@ def cadastrar_devices_e_sensores(token, conn):
     )
     r.raise_for_status()
 
-    cur = conn.cursor()
     sensor_ids = []
 
     for device in r.json():
@@ -127,58 +156,27 @@ def cadastrar_devices_e_sensores(token, conn):
         for sensor in device.get("sensors", []):
             sensor_ids.append(sensor["sensorId"])
 
-            cur.execute("""
-                INSERT INTO sensores (
-                    sensor_id, device_id, nome_customizado,
-                    tipo_sensor, unidade_medida
-                )
-                VALUES (%s,%s,%s,%s,%s)
-                ON CONFLICT (sensor_id) DO UPDATE SET
-                    device_id = EXCLUDED.device_id,
-                    nome_customizado = EXCLUDED.nome_customizado,
-                    tipo_sensor = EXCLUDED.tipo_sensor,
-                    unidade_medida = EXCLUDED.unidade_medida;
-            """, (
-                sensor["sensorId"],
-                device["deviceId"],
-                sensor.get("customName") or f"Sensor {sensor['sensorId']}",
-                sensor.get("sensorType"),
-                sensor.get("uom")
-            ))
-
     conn.commit()
     cur.close()
+    release_conn(conn)
 
     print(f"✅ Sensores encontrados: {len(sensor_ids)}")
 
     return sorted(set(sensor_ids))
 
 # ======================================================
-# GERADOR DE BLOCOS
+# WORKER GALÁCTICO
 # ======================================================
-def gerar_blocos_tempo(data_inicio_str, data_fim_dt, dias_bloco):
+def worker_download_insert(token, lote, inicio_lote, fim):
 
-    inicio = datetime.fromisoformat(
-        data_inicio_str.replace("Z", "")
-    ).replace(tzinfo=timezone.utc)
-
-    while inicio < data_fim_dt:
-        fim = min(inicio + timedelta(days=dias_bloco), data_fim_dt)
-        yield (
-            inicio.strftime("%Y-%m-%dT%H:%M:%S"),
-            fim.strftime("%Y-%m-%dT%H:%M:%S")
-        )
-        inicio = fim
-
-# ======================================================
-# DOWNLOAD PARALELO
-# ======================================================
-def baixar_lote(token, data_inicio, data_fim, lote):
+    conn = get_conn()
+    cur = conn.cursor()
 
     headers = {"Authorization": f"Bearer {token}"}
     sensor_param = ",".join(map(str, lote))
+
     offset = 0
-    registros_total = []
+    total_local = 0
 
     while True:
 
@@ -187,8 +185,8 @@ def baixar_lote(token, data_inicio, data_fim, lote):
             headers=headers,
             params={
                 "version": "1.3",
-                "startDate": data_inicio,
-                "endDate": data_fim,
+                "startDate": inicio_lote,
+                "endDate": fim,
                 "offset": offset,
                 "sensorIds": sensor_param
             },
@@ -201,90 +199,94 @@ def baixar_lote(token, data_inicio, data_fim, lote):
         if not dados:
             break
 
-        registros_total.extend([
+        registros = [
             (d["sensorId"], d["readingDate"], d["sensorValue"])
             for d in dados
-        ])
-
-        offset += len(dados)
-        time.sleep(SLEEP_BETWEEN_CALLS)
-
-    return registros_total
-
-# ======================================================
-# INGESTÃO TURBO COM TIMESTAMP AUTOMÁTICO
-# ======================================================
-def baixar_e_salvar_leituras(token, sensor_ids, conn):
-
-    cur = conn.cursor()
-    agora = datetime.now(timezone.utc)
-
-    data_inicio_auto = obter_ultimo_timestamp(conn)
-
-    janelas = list(
-        gerar_blocos_tempo(data_inicio_auto, agora, BLOCO_DIAS)
-    )
-
-    print(f"🧱 Total de blocos: {len(janelas)}")
-
-    total_registros = 0
-
-    for idx, (data_inicio, data_fim) in enumerate(janelas, start=1):
-
-        print(f"\n🧱 Bloco {idx}/{len(janelas)} | {data_inicio} → {data_fim}")
-
-        lotes = [
-            sensor_ids[i:i + SENSOR_BATCH_SIZE]
-            for i in range(0, len(sensor_ids), SENSOR_BATCH_SIZE)
         ]
 
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        execute_batch(cur, """
+            INSERT INTO leituras (
+                sensor_id,
+                data_leitura,
+                valor_sensor
+            )
+            VALUES (%s,%s,%s)
+            ON CONFLICT (sensor_id, data_leitura) DO NOTHING
+        """, registros, page_size=1500)
 
-            futures = [
-                executor.submit(baixar_lote, token, data_inicio, data_fim, lote)
-                for lote in lotes
-            ]
+        execute_batch(cur, """
+            INSERT INTO sync_state(sensor_id, last_timestamp)
+            VALUES (%s,%s)
+            ON CONFLICT(sensor_id)
+            DO UPDATE SET last_timestamp = EXCLUDED.last_timestamp
+        """, [(r[0], r[1]) for r in registros])
 
-            for future in as_completed(futures):
+        conn.commit()
 
-                registros = future.result()
+        total_local += len(registros)
+        offset += len(dados)
 
-                if not registros:
-                    continue
+        print(f"⚡ Worker {lote[0]}.. +{len(registros)}")
 
-                execute_batch(cur, """
-                    INSERT INTO leituras (
-                        sensor_id,
-                        data_leitura,
-                        valor_sensor
-                    )
-                    VALUES (%s,%s,%s)
-                    ON CONFLICT (sensor_id, data_leitura) DO NOTHING
-                """, registros, page_size=1000)
-
-                conn.commit()
-
-                total_registros += len(registros)
-
-                print(f"📥 Inseridos agora: {len(registros)} | Total geral: {total_registros}")
+        time.sleep(SLEEP_BETWEEN_CALLS)
 
     cur.close()
+    release_conn(conn)
+
+    return total_local
+
+# ======================================================
+# INGESTÃO GALÁCTICA
+# ======================================================
+def baixar_e_salvar_leituras(token, sensor_ids):
+
+    sync_map = carregar_sync_state()
+
+    agora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+    lotes = [
+        sensor_ids[i:i + SENSOR_BATCH_SIZE]
+        for i in range(0, len(sensor_ids), SENSOR_BATCH_SIZE)
+    ]
+
+    total = 0
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+
+        futures = []
+
+        for lote in lotes:
+
+            inicio_lote = min(
+                sync_map.get(s, DATA_INICIAL_HISTORICO)
+                for s in lote
+            )
+
+            futures.append(
+                executor.submit(
+                    worker_download_insert,
+                    token,
+                    lote,
+                    inicio_lote,
+                    agora
+                )
+            )
+
+        for future in as_completed(futures):
+            total += future.result()
+            print(f"📊 TOTAL GLOBAL: {total}")
 
 # ======================================================
 # MAIN
 # ======================================================
 if __name__ == "__main__":
 
-    print("🚀 Iniciando sincronização ORION TURBO")
-
-    conn = psycopg2.connect(DATABASE_URL)
+    print("🚀 ORION GALACTIC INGESTION START")
 
     token = obter_token()
 
-    sensor_ids = cadastrar_devices_e_sensores(token, conn)
+    sensor_ids = cadastrar_devices_e_sensores(token)
 
-    baixar_e_salvar_leituras(token, sensor_ids, conn)
+    baixar_e_salvar_leituras(token, sensor_ids)
 
-    conn.close()
-
-    print("\n🏁 Processo finalizado com sucesso")
+    print("\n🏁 FINALIZADO")
