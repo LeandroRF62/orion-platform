@@ -12,7 +12,7 @@ import threading
 import time
 
 # ======================================================
-# CONFIG
+# CONFIGURAÇÕES
 # ======================================================
 API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://api.oriondata.io/api"
@@ -21,12 +21,11 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 DATA_INICIAL_HISTORICO = "2026-01-01T00:00:00"
 
 REQUEST_TIMEOUT = 30
-SENSOR_BATCH_SIZE = 50
 MAX_WORKERS = 8
-SLEEP_BETWEEN_CALLS = 0.03
+SLEEP_BETWEEN_CALLS = 0.05
 
 # ======================================================
-# HTTP SESSION GLOBAL
+# SESSION HTTP GLOBAL
 # ======================================================
 session = requests.Session()
 
@@ -41,7 +40,7 @@ adapter = HTTPAdapter(max_retries=retries)
 session.mount("https://", adapter)
 
 # ======================================================
-# CONNECTION POOL (🔥 DIFERENCIAL)
+# CONNECTION POOL POSTGRES
 # ======================================================
 db_pool = SimpleConnectionPool(
     minconn=1,
@@ -74,7 +73,7 @@ def obter_token():
     return r.json()["token"]
 
 # ======================================================
-# SYNC STATE
+# SYNC STATE (checkpoint por sensor)
 # ======================================================
 def carregar_sync_state():
 
@@ -105,12 +104,14 @@ def carregar_sync_state():
     return mapa
 
 # ======================================================
-# DEVICES
+# DEVICES E SENSORES
 # ======================================================
 def cadastrar_devices_e_sensores(token):
 
     conn = get_conn()
     cur = conn.cursor()
+
+    print("📡 Atualizando devices...")
 
     r = session.get(
         f"{BASE_URL}/UserDevices",
@@ -165,18 +166,19 @@ def cadastrar_devices_e_sensores(token):
     return sorted(set(sensor_ids))
 
 # ======================================================
-# WORKER GALÁCTICO
+# WORKER POR SENSOR (🔥 PAGINAÇÃO CORRETA)
 # ======================================================
-def worker_download_insert(token, lote, inicio_lote, fim):
+def worker_sensor(token, sensor_id, inicio, fim):
 
     conn = get_conn()
     cur = conn.cursor()
 
     headers = {"Authorization": f"Bearer {token}"}
-    sensor_param = ",".join(map(str, lote))
 
     offset = 0
     total_local = 0
+
+    print(f"🛰️ Sensor {sensor_id} iniciando em {inicio}")
 
     while True:
 
@@ -185,10 +187,10 @@ def worker_download_insert(token, lote, inicio_lote, fim):
             headers=headers,
             params={
                 "version": "1.3",
-                "startDate": inicio_lote,
+                "startDate": inicio,
                 "endDate": fim,
                 "offset": offset,
-                "sensorIds": sensor_param
+                "sensorIds": sensor_id
             },
             timeout=REQUEST_TIMEOUT
         )
@@ -196,7 +198,10 @@ def worker_download_insert(token, lote, inicio_lote, fim):
         r.raise_for_status()
         dados = r.json()
 
-        if not dados:
+        qtd = len(dados)
+
+        if qtd == 0:
+            print(f"✅ Sensor {sensor_id} finalizado | Total: {total_local}")
             break
 
         registros = [
@@ -212,7 +217,7 @@ def worker_download_insert(token, lote, inicio_lote, fim):
             )
             VALUES (%s,%s,%s)
             ON CONFLICT (sensor_id, data_leitura) DO NOTHING
-        """, registros, page_size=1500)
+        """, registros, page_size=500)
 
         execute_batch(cur, """
             INSERT INTO sync_state(sensor_id, last_timestamp)
@@ -223,10 +228,10 @@ def worker_download_insert(token, lote, inicio_lote, fim):
 
         conn.commit()
 
-        total_local += len(registros)
-        offset += len(dados)
+        total_local += qtd
+        offset += qtd
 
-        print(f"⚡ Worker {lote[0]}.. +{len(registros)}")
+        print(f"📡 Sensor {sensor_id} offset {offset}")
 
         time.sleep(SLEEP_BETWEEN_CALLS)
 
@@ -236,7 +241,7 @@ def worker_download_insert(token, lote, inicio_lote, fim):
     return total_local
 
 # ======================================================
-# INGESTÃO GALÁCTICA
+# INGESTÃO COSMIC
 # ======================================================
 def baixar_e_salvar_leituras(token, sensor_ids):
 
@@ -244,44 +249,36 @@ def baixar_e_salvar_leituras(token, sensor_ids):
 
     agora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
-    lotes = [
-        sensor_ids[i:i + SENSOR_BATCH_SIZE]
-        for i in range(0, len(sensor_ids), SENSOR_BATCH_SIZE)
-    ]
-
     total = 0
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
 
         futures = []
 
-        for lote in lotes:
+        for sensor_id in sensor_ids:
 
-            inicio_lote = min(
-                sync_map.get(s, DATA_INICIAL_HISTORICO)
-                for s in lote
-            )
+            inicio = sync_map.get(sensor_id, DATA_INICIAL_HISTORICO)
 
             futures.append(
                 executor.submit(
-                    worker_download_insert,
+                    worker_sensor,
                     token,
-                    lote,
-                    inicio_lote,
+                    sensor_id,
+                    inicio,
                     agora
                 )
             )
 
         for future in as_completed(futures):
             total += future.result()
-            print(f"📊 TOTAL GLOBAL: {total}")
+            print(f"🌌 TOTAL GLOBAL: {total}")
 
 # ======================================================
 # MAIN
 # ======================================================
 if __name__ == "__main__":
 
-    print("🚀 ORION GALACTIC INGESTION START")
+    print("🚀 ORION COSMIC ENGINE START")
 
     token = obter_token()
 
