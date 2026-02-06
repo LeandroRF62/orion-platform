@@ -24,6 +24,13 @@ REQUEST_TIMEOUT = 30
 MAX_WORKERS = 6
 SLEEP_BETWEEN_CALLS = 0.05
 
+TIPOS_VALIDOS = (
+    "A-Axis Delta Angle",
+    "B-Axis Delta Angle",
+    "Air Temperature",
+    "Device Temperature"
+)
+
 # ======================================================
 # SESSION
 # ======================================================
@@ -102,7 +109,7 @@ def carregar_sync_state():
     return mapa
 
 # ======================================================
-# DEVICES + SENSORES
+# DEVICES + SENSORES (🔥 BLINDADO)
 # ======================================================
 def cadastrar_devices_e_sensores(token):
 
@@ -153,8 +160,13 @@ def cadastrar_devices_e_sensores(token):
         for sensor in device.get("sensors",[]):
 
             canal=str(sensor.get("channelNumber")).strip()
+            tipo=(sensor.get("sensorType") or "").strip()
 
+            # 🔥 FILTRO DEFINITIVO
             if canal not in ("1","2","3"):
+                continue
+
+            if tipo not in TIPOS_VALIDOS:
                 continue
 
             sid=sensor["sensorId"]
@@ -175,7 +187,7 @@ def cadastrar_devices_e_sensores(token):
                 sid,
                 device["deviceId"],
                 sensor.get("customName") or f"Sensor {sid}",
-                sensor.get("sensorType"),
+                tipo,
                 sensor.get("uom")
             ))
 
@@ -186,12 +198,11 @@ def cadastrar_devices_e_sensores(token):
     cur.close()
     release_conn(conn)
 
-    print(f"✅ Devices tiltímetro: {len(mapa_devices)}")
-
+    print(f"✅ Devices tiltímetro válidos: {len(mapa_devices)}")
     return mapa_devices
 
 # ======================================================
-# WORKER DEVICE (🔥 NOVO)
+# WORKER DEVICE
 # ======================================================
 def worker_device(token,device_id,sensor_ids,sync_map,agora):
 
@@ -273,7 +284,6 @@ def worker_device(token,device_id,sensor_ids,sync_map,agora):
 def baixar_e_salvar_leituras(token,mapa_devices):
 
     sync_map=carregar_sync_state()
-
     agora=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
     total=0
@@ -307,9 +317,7 @@ if __name__=="__main__":
     print("🚀 ORION COSMIC ENGINE V4 START")
 
     token=obter_token()
-
     mapa_devices=cadastrar_devices_e_sensores(token)
-
     baixar_e_salvar_leituras(token,mapa_devices)
 
     print("\n🏁 FINALIZADO")
