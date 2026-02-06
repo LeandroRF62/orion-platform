@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 import os
 from dotenv import load_dotenv
 from pathlib import Path
@@ -24,10 +23,10 @@ def classificar_tarp(valor, limites):
 # 🎨 CORES FIXAS DEFINIDAS
 # ======================================================
 CORES_SENSOR = {
-    "A-Axis Delta Angle": "#2563eb",   # Azul
-    "B-Axis Delta Angle": "#f97316",   # Laranja
-    "Device Temperature": "#a855f7",   # Vermelho
-    "Air Temperature": "#ef4444"       # Roxo
+    "A-Axis Delta Angle": "#2563eb",
+    "B-Axis Delta Angle": "#f97316",
+    "Device Temperature": "#a855f7",
+    "Air Temperature": "#ef4444"
 }
 
 # ===============================
@@ -75,7 +74,7 @@ if st.sidebar.button("🔄 Atualizar Dados"):
     st.rerun()
 
 # ===============================
-# QUERY BANCO (🔥 AGORA COM TEMPERATURA)
+# QUERY BANCO
 # ===============================
 @st.cache_data(ttl=300)
 def carregar_dados_db():
@@ -119,12 +118,10 @@ df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 # ======================================================
 tilt_devices = (
     df[df["tipo_sensor"].isin(["A-Axis Delta Angle", "B-Axis Delta Angle"])]
-    ["device_name"]
-    .unique()
+    ["device_name"].unique()
 )
 
 df = df[df["device_name"].isin(tilt_devices)]
-
 
 # ======================================================
 # 🎛️ DISPOSITIVO
@@ -149,12 +146,33 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     df_devices["label"] = df_devices["device_name"] + " – " + df_devices["status_str"]
 
-    device_label_map = dict(zip(df_devices["label"], df_devices["device_name"]))
+    # 🔎 FILTRO ONLINE / OFFLINE
+    col1, col2 = st.columns(2)
 
-    
-    # mantém principal salvo mesmo trocando variável
+    with col1:
+        filtro_online = st.checkbox("Online", value=True)
+
+    with col2:
+        filtro_offline = st.checkbox("Offline", value=True)
+
+    if filtro_online and not filtro_offline:
+        df_devices_filtrado = df_devices[df_devices["status_lower"] == "online"]
+    elif filtro_offline and not filtro_online:
+        df_devices_filtrado = df_devices[df_devices["status_lower"] == "offline"]
+    elif not filtro_online and not filtro_offline:
+        df_devices_filtrado = df_devices.iloc[0:0]
+    else:
+        df_devices_filtrado = df_devices
+
+    device_label_map = dict(
+        zip(df_devices_filtrado["label"], df_devices_filtrado["device_name"])
+    )
+
     if "device_principal_label" not in st.session_state:
-        st.session_state["device_principal_label"] = sorted(device_label_map.keys())[0]
+        st.session_state["device_principal_label"] = (
+            sorted(device_label_map.keys())[0]
+            if len(device_label_map) > 0 else None
+        )
 
     device_principal_label = st.selectbox(
         "Selecionar Dispositivo Principal",
@@ -164,8 +182,6 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     device_principal = device_label_map[device_principal_label]
 
-
-    # inicializa session_state apenas uma vez
     if "outros_labels" not in st.session_state:
         st.session_state["outros_labels"] = []
 
@@ -175,42 +191,11 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
         key="outros_labels"
     )
 
-  
 devices_selecionados = list(dict.fromkeys(
     [device_principal] + [device_label_map[l] for l in outros_labels]
 ))
 
 df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
-
-    # ======================================================
-    # 🔎 FILTRO ONLINE / OFFLINE (NOVO)
-    # ======================================================
-    col1, col2 = st.columns(2)
-
-    with col1:
-        filtro_online = st.checkbox("Online", value=True)
-
-    with col2:
-        filtro_offline = st.checkbox("Offline", value=True)
-
-    # aplica filtro sem alterar estrutura existente
-    if filtro_online and not filtro_offline:
-        df_devices_filtrado = df_devices[df_devices["status_lower"] == "online"]
-
-    elif filtro_offline and not filtro_online:
-        df_devices_filtrado = df_devices[df_devices["status_lower"] == "offline"]
-
-    elif not filtro_online and not filtro_offline:
-        df_devices_filtrado = df_devices.iloc[0:0]  # vazio
-
-    else:
-        df_devices_filtrado = df_devices
-
-    # recria label map baseado no filtro
-    device_label_map = dict(
-        zip(df_devices_filtrado["label"], df_devices_filtrado["device_name"])
-    )
-
 
 # ======================================================
 # 📅 PERÍODO
@@ -248,10 +233,8 @@ if modo_escala == "Relativa (primeiro valor = zero)":
         .first()
     )
     df_final["valor_grafico"] = (
-        df_final["valor_sensor"]
-        - df_final["sensor_id"].map(refs)
+        df_final["valor_sensor"] - df_final["sensor_id"].map(refs)
     )
-
 
 # ======================================================
 # HEADER – STATUS / BATERIA / ÚLTIMA TX
@@ -276,29 +259,25 @@ else:
 
 if len(devices_selecionados) == 1:
     st.markdown(
-f"""
-<div style="display:flex;align-items:center;gap:14px;padding:8px 0;">
-<h3 style="margin:0;">{device_principal}</h3>
-
-<span style="background:{cor_status};color:white;padding:4px 10px;border-radius:6px;font-size:14px;">
-{status.capitalize()}
-</span>
-
-<div style="display:flex;align-items:center;gap:6px;background:#f3f4f6;padding:4px 10px;border-radius:6px;">
-<div style="width:28px;height:12px;border:2px solid #111;border-radius:3px;">
-<div style="width:{bateria}%;height:100%;background:{cor_bateria};"></div>
-</div>
-<strong>{bateria}%</strong>
-</div>
-
-<span style="color:#f97316;font-size:16px;">
-⏱ Última transmissão: {ultima_tx}
-</span>
-</div>
-""",
+        f"""
+        <div style="display:flex;align-items:center;gap:14px;padding:8px 0;">
+        <h3 style="margin:0;">{device_principal}</h3>
+        <span style="background:{cor_status};color:white;padding:4px 10px;border-radius:6px;font-size:14px;">
+        {status.capitalize()}
+        </span>
+        <div style="display:flex;align-items:center;gap:6px;background:#f3f4f6;padding:4px 10px;border-radius:6px;">
+        <div style="width:28px;height:12px;border:2px solid #111;border-radius:3px;">
+        <div style="width:{bateria}%;height:100%;background:{cor_bateria};"></div>
+        </div>
+        <strong>{bateria}%</strong>
+        </div>
+        <span style="color:#f97316;font-size:16px;">
+        ⏱ Última transmissão: {ultima_tx}
+        </span>
+        </div>
+        """,
         unsafe_allow_html=True
     )
-
 
 # ===============================
 # GRÁFICO
@@ -310,34 +289,6 @@ fig = go.Figure()
 devices_unicos = list(dict.fromkeys(df_final["device_name"].tolist()))
 device_index = {d: i for i, d in enumerate(devices_unicos)}
 
-# 🎨 Paleta profissional por DEVICE
-PALETA_DEVICES = [
-    {
-        "A-Axis Delta Angle": "#2563eb",   # azul
-        "B-Axis Delta Angle": "#f97316",   # laranja
-        "Device Temperature": "#a855f7",
-        "Air Temperature": "#ef4444"
-    },
-    {
-        "A-Axis Delta Angle": "#10b981",   # verde
-        "B-Axis Delta Angle": "#ec4899",   # rosa
-        "Device Temperature": "#6366f1",
-        "Air Temperature": "#ef4444"
-    },
-    {
-        "A-Axis Delta Angle": "#06b6d4",   # ciano
-        "B-Axis Delta Angle": "#eab308",   # amarelo
-        "Device Temperature": "#a855f7",
-        "Air Temperature": "#ef4444"
-    },
-    {
-        "A-Axis Delta Angle": "#8b5cf6",   # roxo
-        "B-Axis Delta Angle": "#ef4444",   # vermelho
-        "Device Temperature": "#a855f7",
-        "Air Temperature": "#ef4444"
-    }
-]
-
 for serie in df_final["serie"].unique():
 
     d = df_final[df_final["serie"] == serie]
@@ -348,19 +299,14 @@ for serie in df_final["serie"].unique():
 
     idx = device_index.get(device, 0)
 
-    # 🎨 cores únicas por device (incluindo temperatura)
     if tipo == "A-Axis Delta Angle":
         cor_final = ["#2563eb","#10b981","#06b6d4","#8b5cf6","#f43f5e"][idx % 5]
-
     elif tipo == "B-Axis Delta Angle":
         cor_final = ["#f97316","#ec4899","#eab308","#22c55e","#0ea5e9"][idx % 5]
-
     elif tipo == "Device Temperature":
         cor_final = ["#a855f7","#6366f1","#9333ea","#c026d3","#7c3aed"][idx % 5]
-
     elif tipo == "Air Temperature":
         cor_final = ["#ef4444","#f59e0b","#14b8a6","#fb7185","#e11d48"][idx % 5]
-
     else:
         cor_final = "#000000"
 
@@ -370,17 +316,9 @@ for serie in df_final["serie"].unique():
         mode="lines",
         name=serie,
         yaxis="y2" if eixo_secundario else "y",
-        line=dict(
-            color=cor_final,
-            dash="dash" if eixo_secundario else "solid"
-        ),
-        hovertemplate=
-        "<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>" +
-        "%{fullData.name}<br>" +
-        "Valor: %{y:.4f}<extra></extra>"
+        line=dict(color=cor_final, dash="dash" if eixo_secundario else "solid"),
+        hovertemplate="<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>%{fullData.name}<br>Valor: %{y:.4f}<extra></extra>"
     ))
-
-
 
 label_y = "Valor Absoluto" if modo_escala == "Absoluta" else "Δ Valor Relativo"
 
@@ -388,33 +326,16 @@ fig.update_layout(
     height=780,
     hovermode="x unified",
     dragmode="pan",
-    legend=dict(
-        orientation="h",
-        y=-0.15,
-        x=0.5,
-        xanchor="center",
-        title_text=""
-    ),
+    legend=dict(orientation="h", y=-0.15, x=0.5, xanchor="center", title_text=""),
     yaxis=dict(title=f"<b>{label_y}</b>"),
-    yaxis2=dict(
-        title="<b>Temperatura (°C)</b>",
-        overlaying="y",
-        side="right"
-    )
+    yaxis2=dict(title="<b>Temperatura (°C)</b>", overlaying="y", side="right")
 )
 
 fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor")
 fig.update_yaxes(showspikes=True, spikemode="across", spikesnap="cursor")
 
-st.plotly_chart(
-    fig,
-    use_container_width=True,
-    config={
-        "scrollZoom": True,
-        "doubleClick": "reset",
-        "displaylogo": False
-    }
-)
+st.plotly_chart(fig, use_container_width=True,
+                config={"scrollZoom": True, "doubleClick": "reset", "displaylogo": False})
 
 # ======================================================
 # 🛰️ MAPA
@@ -447,10 +368,7 @@ mapa.update_layout(
         accesstoken=MAPBOX_TOKEN,
         style="satellite-streets",
         zoom=12,
-        center=dict(
-            lat=df_mapa["latitude"].mean(),
-            lon=df_mapa["longitude"].mean()
-        )
+        center=dict(lat=df_mapa["latitude"].mean(), lon=df_mapa["longitude"].mean())
     ),
     margin=dict(l=0, r=0, t=0, b=0)
 )
