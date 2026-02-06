@@ -161,8 +161,10 @@ def cadastrar_devices_e_sensores(token):
 
             channel_number = sensor.get("channelNumber")
 
-            if channel_number not in (1, 2, 3):
-                continue
+            # 🔥 canais válidos do tiltímetro
+            if channel_number not in ("1", "2", "3"):
+            continue
+
 
             sensor_ids.append(sensor["sensorId"])
 
