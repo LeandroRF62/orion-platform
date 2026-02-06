@@ -267,7 +267,7 @@ def worker_device(token,device_id,sensor_ids,sync_map,agora):
         conn.commit()
 
         total_local+=qtd
-        offset+=qtd
+        offset+=1
 
         print(f"📡 Device {device_id} offset {offset}")
 
