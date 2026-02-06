@@ -182,6 +182,36 @@ devices_selecionados = list(dict.fromkeys(
 
 df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
 
+    # ======================================================
+    # 🔎 FILTRO ONLINE / OFFLINE (NOVO)
+    # ======================================================
+    col1, col2 = st.columns(2)
+
+    with col1:
+        filtro_online = st.checkbox("Online", value=True)
+
+    with col2:
+        filtro_offline = st.checkbox("Offline", value=True)
+
+    # aplica filtro sem alterar estrutura existente
+    if filtro_online and not filtro_offline:
+        df_devices_filtrado = df_devices[df_devices["status_lower"] == "online"]
+
+    elif filtro_offline and not filtro_online:
+        df_devices_filtrado = df_devices[df_devices["status_lower"] == "offline"]
+
+    elif not filtro_online and not filtro_offline:
+        df_devices_filtrado = df_devices.iloc[0:0]  # vazio
+
+    else:
+        df_devices_filtrado = df_devices
+
+    # recria label map baseado no filtro
+    device_label_map = dict(
+        zip(df_devices_filtrado["label"], df_devices_filtrado["device_name"])
+    )
+
+
 # ======================================================
 # 📅 PERÍODO
 # ======================================================
