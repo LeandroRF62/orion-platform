@@ -1,4 +1,4 @@
-name: Ingestão Orion (15min)
+name: Ingestão_Orion_(15min)
 
 on:
   schedule:
