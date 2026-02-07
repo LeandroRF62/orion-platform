@@ -331,8 +331,20 @@ fig.update_layout(
     yaxis2=dict(title="<b>Temperatura (°C)</b>", overlaying="y", side="right")
 )
 
-fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor")
-fig.update_yaxes(showspikes=True, spikemode="across", spikesnap="cursor")
+fig.update_xaxes(
+    showspikes=True,
+    spikemode="across",
+    spikesnap="cursor",
+    showgrid=False
+)
+
+fig.update_yaxes(
+    showspikes=True,
+    spikemode="across",
+    spikesnap="cursor",
+    showgrid=False
+)
+
 
 st.plotly_chart(fig, use_container_width=True,
                 config={"scrollZoom": True, "doubleClick": "reset", "displaylogo": False})
