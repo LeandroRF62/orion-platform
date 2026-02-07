@@ -345,6 +345,11 @@ fig.update_yaxes(
     showgrid=False
 )
 
+# 🔥 REMOVE GRID DO EIXO SECUNDÁRIO
+fig.update_layout(
+    yaxis2=dict(showgrid=False)
+)
+
 
 st.plotly_chart(fig, use_container_width=True,
                 config={"scrollZoom": True, "doubleClick": "reset", "displaylogo": False})
