@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: ingestao-orion
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   ingestao_incremental:
