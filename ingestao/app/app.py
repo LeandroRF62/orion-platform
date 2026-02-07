@@ -304,7 +304,7 @@ for serie in df_final["serie"].unique():
     elif tipo == "B-Axis Delta Angle":
         cor_final = ["#f97316","#ec4899","#eab308","#22c55e","#0ea5e9"][idx % 5]
     elif tipo == "Device Temperature":
-        cor_final = ["#a855f7","#6366f1","#9333ea","#c026d3","#7c3aed"][idx % 5]
+        cor_final = ["#ef4444","#f59e0b","#14b8a6","#fb7185","#e11d48"][idx % 5]
     elif tipo == "Air Temperature":
         cor_final = ["#ef4444","#f59e0b","#14b8a6","#fb7185","#e11d48"][idx % 5]
     else:
