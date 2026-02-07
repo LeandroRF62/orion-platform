@@ -30,7 +30,7 @@ CORES_SENSOR = {
 }
 
 # ===============================
-# AUTENTICAÇÃO
+# AUTENTICAÇÃO 
 # ===============================
 APP_PASSWORD = os.getenv("APP_PASSWORD", "orion123")
 
