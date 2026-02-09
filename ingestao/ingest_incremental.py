@@ -22,7 +22,6 @@ DATA_INICIAL_HISTORICO = "2026-01-30T00:00:00"
 
 REQUEST_TIMEOUT = 30
 MAX_WORKERS = 4
-SLEEP_BETWEEN_CALLS = 0.05
 
 TIPOS_VALIDOS = (
     "A-Axis Delta Angle",
@@ -31,15 +30,31 @@ TIPOS_VALIDOS = (
     "Device Temperature"
 )
 
+# 🔥 RATE LIMIT GLOBAL ORION (ANTI 429)
+API_MIN_INTERVAL = 0.6   # segundos entre requests globais
+api_lock = threading.Lock()
+ultimo_request = 0
+
+def aguardar_rate_limit():
+    global ultimo_request
+    with api_lock:
+        agora = time.time()
+        delta = agora - ultimo_request
+
+        if delta < API_MIN_INTERVAL:
+            time.sleep(API_MIN_INTERVAL - delta)
+
+        ultimo_request = time.time()
+
 # ======================================================
 # SESSION
 # ======================================================
 session = requests.Session()
 
 retries = Retry(
-    total=5,
+    total=3,
     backoff_factor=1,
-    status_forcelist=[429,500,502,503,504],
+    status_forcelist=[500,502,503,504],
     allowed_methods=["GET"]
 )
 
@@ -70,12 +85,15 @@ def release_conn(conn):
 # ======================================================
 def obter_token():
     print("🔐 Obtendo token...")
+    aguardar_rate_limit()
+
     r = session.get(
         f"{BASE_URL}/token",
         params={"apiKey": API_KEY},
         timeout=REQUEST_TIMEOUT
     )
     r.raise_for_status()
+
     print("✅ Token obtido")
     return r.json()["token"]
 
@@ -109,7 +127,7 @@ def carregar_sync_state():
     return mapa
 
 # ======================================================
-# DEVICES + SENSORES (🔥 BLINDADO)
+# DEVICES + SENSORES
 # ======================================================
 def cadastrar_devices_e_sensores(token):
 
@@ -117,6 +135,8 @@ def cadastrar_devices_e_sensores(token):
     cur=conn.cursor()
 
     print("📡 Atualizando devices...")
+
+    aguardar_rate_limit()
 
     r=session.get(
         f"{BASE_URL}/UserDevices",
@@ -162,7 +182,6 @@ def cadastrar_devices_e_sensores(token):
             canal=str(sensor.get("channelNumber")).strip()
             tipo=(sensor.get("sensorType") or "").strip()
 
-            # 🔥 FILTRO DEFINITIVO
             if canal not in ("1","2","3"):
                 continue
 
@@ -202,7 +221,7 @@ def cadastrar_devices_e_sensores(token):
     return mapa_devices
 
 # ======================================================
-# WORKER DEVICE
+# WORKER DEVICE (ANTI 429)
 # ======================================================
 def worker_device(token,device_id,sensor_ids,sync_map,agora):
 
@@ -225,6 +244,8 @@ def worker_device(token,device_id,sensor_ids,sync_map,agora):
 
     while True:
 
+        aguardar_rate_limit()
+
         r=session.get(
             f"{BASE_URL}/SensorData",
             headers=headers,
@@ -238,9 +259,14 @@ def worker_device(token,device_id,sensor_ids,sync_map,agora):
             timeout=REQUEST_TIMEOUT
         )
 
-        r.raise_for_status()
-        dados=r.json()
+        if r.status_code==429:
+            print("⏳ RATE LIMIT atingido, aguardando...")
+            time.sleep(5)
+            continue
 
+        r.raise_for_status()
+
+        dados=r.json()
         qtd=len(dados)
 
         if qtd==0:
@@ -270,8 +296,6 @@ def worker_device(token,device_id,sensor_ids,sync_map,agora):
         offset+=1
 
         print(f"📡 Device {device_id} offset {offset}")
-
-        time.sleep(SLEEP_BETWEEN_CALLS)
 
     cur.close()
     release_conn(conn)
@@ -314,7 +338,7 @@ def baixar_e_salvar_leituras(token,mapa_devices):
 # ======================================================
 if __name__=="__main__":
 
-    print("🚀 ORION COSMIC ENGINE V4 START")
+    print("🚀 ORION COSMIC ENGINE V5 START")
 
     token=obter_token()
     mapa_devices=cadastrar_devices_e_sensores(token)
