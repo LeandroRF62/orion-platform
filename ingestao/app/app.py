@@ -150,6 +150,10 @@ with st.sidebar.expander("📍 Ramal", expanded=True):
 
 df = df[df["reference"] == ramal_selecionado]
 
+if df.empty:
+    st.warning("Nenhum dado encontrado para este ramal.")
+    st.stop()
+
 # ======================================================
 # FILTRO TILT
 # ======================================================
@@ -216,14 +220,25 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
 df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
 
+if df_final.empty:
+    st.warning("Nenhum dado encontrado para os dispositivos selecionados.")
+    st.stop()
+
 # ======================================================
 # PERÍODO
 # ======================================================
 
 with st.sidebar.expander("📅 Período de Análise", expanded=False):
 
-    data_min = df_final["data_leitura"].min().date()
-    data_max = df_final["data_leitura"].max().date()
+    data_min = df_final["data_leitura"].min()
+    data_max = df_final["data_leitura"].max()
+
+    if pd.isna(data_min) or pd.isna(data_max):
+        st.warning("Não há dados de tempo disponíveis.")
+        st.stop()
+
+    data_min = data_min.date()
+    data_max = data_max.date()
 
     c1, c2 = st.columns(2)
 
