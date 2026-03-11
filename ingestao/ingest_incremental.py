@@ -14,6 +14,7 @@ import time
 # ======================================================
 # CONFIG
 # ======================================================
+
 API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://api.oriondata.io/api"
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -31,8 +32,9 @@ TIPOS_VALIDOS = (
 )
 
 # ======================================================
-# RATE LIMIT GLOBAL
+# RATE LIMIT
 # ======================================================
+
 API_MIN_INTERVAL = 0.6
 api_lock = threading.Lock()
 ultimo_request = 0
@@ -54,6 +56,7 @@ def aguardar_rate_limit():
 # ======================================================
 # SESSION
 # ======================================================
+
 session = requests.Session()
 
 retries = Retry(
@@ -64,14 +67,16 @@ retries = Retry(
 )
 
 adapter = HTTPAdapter(max_retries=retries)
+
 session.mount("https://", adapter)
 
 # ======================================================
 # DB POOL
 # ======================================================
+
 db_pool = SimpleConnectionPool(
     minconn=1,
-    maxconn=MAX_WORKERS + 2,
+    maxconn=MAX_WORKERS+2,
     dsn=DATABASE_URL
 )
 
@@ -88,6 +93,7 @@ def release_conn(conn):
 # ======================================================
 # TOKEN
 # ======================================================
+
 def obter_token():
 
     print("🔐 Obtendo token...")
@@ -109,6 +115,7 @@ def obter_token():
 # ======================================================
 # SYNC STATE
 # ======================================================
+
 def carregar_sync_state():
 
     conn = get_conn()
@@ -142,6 +149,7 @@ def carregar_sync_state():
 # ======================================================
 # DEVICES + SENSORES
 # ======================================================
+
 def cadastrar_devices_e_sensores(token):
 
     conn = get_conn()
@@ -153,7 +161,7 @@ def cadastrar_devices_e_sensores(token):
 
     r = session.get(
         f"{BASE_URL}/UserDevices",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization":f"Bearer {token}"},
         timeout=REQUEST_TIMEOUT
     )
 
@@ -163,11 +171,18 @@ def cadastrar_devices_e_sensores(token):
 
     devices = r.json()
 
+    print(f"📊 Devices recebidos da API: {len(devices)}")
+
     for device in devices:
 
         reference = device.get("reference")
 
-        print(f"🔎 Device {device['deviceId']} | reference: {reference}")
+        # 🔎 DEBUG PRINCIPAL
+        print(
+            f"DEBUG DEVICE | id={device['deviceId']} "
+            f"name={device.get('deviceName')} "
+            f"reference={reference}"
+        )
 
         cur.execute("""
             INSERT INTO devices(
@@ -183,17 +198,17 @@ def cadastrar_devices_e_sensores(token):
             )
             VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT(device_id) DO UPDATE SET
-                device_name = EXCLUDED.device_name,
-                serial_number = EXCLUDED.serial_number,
-                status = EXCLUDED.status,
-                latitude = EXCLUDED.latitude,
-                longitude = EXCLUDED.longitude,
-                last_upload = EXCLUDED.last_upload,
-                battery_percentage = EXCLUDED.battery_percentage,
-                reference = EXCLUDED.reference;
-        """, (
+                device_name=EXCLUDED.device_name,
+                serial_number=EXCLUDED.serial_number,
+                status=EXCLUDED.status,
+                latitude=EXCLUDED.latitude,
+                longitude=EXCLUDED.longitude,
+                last_upload=EXCLUDED.last_upload,
+                battery_percentage=EXCLUDED.battery_percentage,
+                reference=EXCLUDED.reference;
+        """,(
             device["deviceId"],
-            device["deviceName"],
+            device.get("deviceName"),
             device.get("serialNumber"),
             device.get("status"),
             device.get("latitude"),
@@ -203,6 +218,8 @@ def cadastrar_devices_e_sensores(token):
             reference
         ))
 
+        print(f"💾 Gravado device {device['deviceId']} reference={reference}")
+
         processar_alertas_status(
             conn,
             device["deviceId"],
@@ -211,7 +228,7 @@ def cadastrar_devices_e_sensores(token):
 
         sensores_validos = []
 
-        for sensor in device.get("sensors", []):
+        for sensor in device.get("sensors",[]):
 
             canal = str(sensor.get("channelNumber")).strip()
             tipo = (sensor.get("sensorType") or "").strip()
@@ -236,11 +253,11 @@ def cadastrar_devices_e_sensores(token):
                 )
                 VALUES(%s,%s,%s,%s,%s)
                 ON CONFLICT(sensor_id) DO UPDATE SET
-                    device_id = EXCLUDED.device_id,
-                    nome_customizado = EXCLUDED.nome_customizado,
-                    tipo_sensor = EXCLUDED.tipo_sensor,
-                    unidade_medida = EXCLUDED.unidade_medida;
-            """, (
+                    device_id=EXCLUDED.device_id,
+                    nome_customizado=EXCLUDED.nome_customizado,
+                    tipo_sensor=EXCLUDED.tipo_sensor,
+                    unidade_medida=EXCLUDED.unidade_medida;
+            """,(
                 sid,
                 device["deviceId"],
                 sensor.get("customName") or f"Sensor {sid}",
@@ -249,7 +266,6 @@ def cadastrar_devices_e_sensores(token):
             ))
 
         if sensores_validos:
-
             mapa_devices[device["deviceId"]] = sensores_validos
 
     conn.commit()
