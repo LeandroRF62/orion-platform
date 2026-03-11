@@ -175,20 +175,26 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
         zip(df_devices["label"], df_devices["device_name"])
     )
 
+    labels = sorted(device_label_map.keys())
+
+    if len(labels) == 0:
+        st.warning("Nenhum dispositivo encontrado para essa referência.")
+        st.stop()
+
     device_principal_label = st.selectbox(
         "Selecionar Dispositivo Principal",
-        sorted(device_label_map.keys())
+        labels
     )
 
-    device_principal = device_label_map[device_principal_label]
+    device_principal = device_label_map.get(device_principal_label)
 
     outros_labels = st.multiselect(
         "Adicionar Outros Dispositivos",
-        sorted(device_label_map.keys())
+        labels
     )
 
 devices_selecionados = list(dict.fromkeys(
-    [device_principal] + [device_label_map[l] for l in outros_labels]
+    [device_principal] + [device_label_map[l] for l in outros_labels if l in device_label_map]
 ))
 
 df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
