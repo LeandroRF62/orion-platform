@@ -31,7 +31,7 @@ TIPOS_VALIDOS = (
 )
 
 # 🔥 RATE LIMIT GLOBAL ORION (ANTI 429)
-API_MIN_INTERVAL = 0.6   # segundos entre requests globais
+API_MIN_INTERVAL = 0.6
 api_lock = threading.Lock()
 ultimo_request = 0
 
@@ -194,20 +194,22 @@ def cadastrar_devices_e_sensores(token):
             cur.execute("""
                 INSERT INTO sensores(
                     sensor_id,device_id,nome_customizado,
-                    tipo_sensor,unidade_medida
+                    tipo_sensor,unidade_medida,reference
                 )
-                VALUES(%s,%s,%s,%s,%s)
+                VALUES(%s,%s,%s,%s,%s,%s)
                 ON CONFLICT(sensor_id) DO UPDATE SET
                     device_id=EXCLUDED.device_id,
                     nome_customizado=EXCLUDED.nome_customizado,
                     tipo_sensor=EXCLUDED.tipo_sensor,
-                    unidade_medida=EXCLUDED.unidade_medida;
+                    unidade_medida=EXCLUDED.unidade_medida,
+                    reference=EXCLUDED.reference;
             """,(
                 sid,
                 device["deviceId"],
                 sensor.get("customName") or f"Sensor {sid}",
                 tipo,
-                sensor.get("uom")
+                sensor.get("uom"),
+                sensor.get("reference")
             ))
 
         if sensores_validos:
@@ -221,7 +223,7 @@ def cadastrar_devices_e_sensores(token):
     return mapa_devices
 
 # ======================================================
-# WORKER DEVICE (ANTI 429)
+# WORKER DEVICE
 # ======================================================
 def worker_device(token,device_id,sensor_ids,sync_map,agora):
 
