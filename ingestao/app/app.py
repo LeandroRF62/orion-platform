@@ -110,7 +110,6 @@ def carregar_dados_db():
 
     return pd.read_sql(query, engine)
 
-
 df = carregar_dados_db()
 
 if df.empty:
@@ -171,31 +170,33 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     df_devices["label"] = df_devices["device_name"] + " – " + df_devices["status_str"]
 
-    device_label_map = dict(
-        zip(df_devices["label"], df_devices["device_name"])
-    )
+    device_label_map = dict(zip(df_devices["label"], df_devices["device_name"]))
 
     labels = sorted(device_label_map.keys())
 
-    if len(labels) == 0:
-        st.warning("Nenhum dispositivo encontrado para essa referência.")
-        st.stop()
+    selecionar_todos = st.checkbox("Selecionar todos os dispositivos desta referência")
 
-    device_principal_label = st.selectbox(
-        "Selecionar Dispositivo Principal",
-        labels
-    )
+    if selecionar_todos:
 
-    device_principal = device_label_map.get(device_principal_label)
+        devices_selecionados = list(device_label_map.values())
 
-    outros_labels = st.multiselect(
-        "Adicionar Outros Dispositivos",
-        labels
-    )
+    else:
 
-devices_selecionados = list(dict.fromkeys(
-    [device_principal] + [device_label_map[l] for l in outros_labels if l in device_label_map]
-))
+        device_principal_label = st.selectbox(
+            "Selecionar Dispositivo Principal",
+            labels
+        )
+
+        device_principal = device_label_map.get(device_principal_label)
+
+        outros_labels = st.multiselect(
+            "Adicionar Outros Dispositivos",
+            labels
+        )
+
+        devices_selecionados = list(dict.fromkeys(
+            [device_principal] + [device_label_map[l] for l in outros_labels if l in device_label_map]
+        ))
 
 df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
 
@@ -270,11 +271,23 @@ for serie in df_final["serie"].unique():
 fig.update_layout(
     height=780,
     hovermode="x unified",
+    dragmode="pan",
     yaxis=dict(title="Valor"),
     yaxis2=dict(title="Temperatura (°C)", overlaying="y", side="right")
 )
 
-st.plotly_chart(fig, use_container_width=True)
+fig.update_xaxes(showspikes=True)
+fig.update_yaxes(showspikes=True)
+
+st.plotly_chart(
+    fig,
+    use_container_width=True,
+    config={
+        "scrollZoom": True,
+        "doubleClick": "reset",
+        "displaylogo": False
+    }
+)
 
 # ======================================================
 # MAPA
@@ -288,12 +301,17 @@ df_mapa = (
     .dropna(subset=["latitude", "longitude"])
 )
 
+df_mapa["cor"] = df_mapa["status"].astype(str).str.lower().apply(
+    lambda x: "#6ee7b7" if x == "online" else "#ef4444"
+)
+
 mapa = go.Figure(go.Scattermapbox(
     lat=df_mapa["latitude"],
     lon=df_mapa["longitude"],
     mode="markers+text",
-    marker=dict(size=20),
-    text=df_mapa["device_name"]
+    marker=dict(size=20, color=df_mapa["cor"]),
+    text=df_mapa["device_name"],
+    textposition="top center"
 ))
 
 mapa.update_layout(
@@ -306,10 +324,15 @@ mapa.update_layout(
             lat=df_mapa["latitude"].mean(),
             lon=df_mapa["longitude"].mean()
         )
-    )
+    ),
+    margin=dict(l=0, r=0, t=0, b=0)
 )
 
-st.plotly_chart(mapa, use_container_width=True)
+st.plotly_chart(
+    mapa,
+    use_container_width=True,
+    config={"scrollZoom": True}
+)
 
 # ======================================================
 # TABELA
