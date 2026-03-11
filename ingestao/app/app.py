@@ -20,7 +20,7 @@ def classificar_tarp(valor, limites):
         return "Verde"
 
 # ======================================================
-# 🎨 CORES FIXAS DEFINIDAS
+# 🎨 CORES FIXAS
 # ======================================================
 CORES_SENSOR = {
     "A-Axis Delta Angle": "#2563eb",
@@ -30,7 +30,7 @@ CORES_SENSOR = {
 }
 
 # ===============================
-# AUTENTICAÇÃO 
+# AUTENTICAÇÃO
 # ===============================
 APP_PASSWORD = os.getenv("APP_PASSWORD", "orion123")
 
@@ -38,7 +38,9 @@ if "auth_ok" not in st.session_state:
     st.session_state.auth_ok = False
 
 if not st.session_state.auth_ok:
+
     st.title("🔐 Acesso restrito")
+
     senha = st.text_input("Senha", type="password")
 
     if st.button("Entrar"):
@@ -47,6 +49,7 @@ if not st.session_state.auth_ok:
             st.rerun()
         else:
             st.error("Senha incorreta")
+
     st.stop()
 
 # ===============================
@@ -67,7 +70,7 @@ st.set_page_config(
 )
 
 # ===============================
-# 🔄 BOTÃO ATUALIZAR DADOS
+# BOTÃO ATUALIZAR
 # ===============================
 if st.sidebar.button("🔄 Atualizar Dados"):
     st.cache_data.clear()
@@ -78,6 +81,7 @@ if st.sidebar.button("🔄 Atualizar Dados"):
 # ===============================
 @st.cache_data(ttl=300)
 def carregar_dados_db():
+
     query = """
         SELECT 
             l.data_leitura,
@@ -86,6 +90,7 @@ def carregar_dados_db():
             s.tipo_sensor,
             s.device_id,
             d.device_name,
+            d.reference,
             d.latitude,
             d.longitude,
             d.status,
@@ -102,7 +107,9 @@ def carregar_dados_db():
         )
         ORDER BY l.data_leitura
     """
+
     return pd.read_sql(query, engine)
+
 
 df = carregar_dados_db()
 
@@ -114,8 +121,24 @@ df["data_leitura"] = pd.to_datetime(df["data_leitura"]).dt.tz_localize(None)
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
 # ======================================================
-# 🎯 FILTRO - SOMENTE TILTÍMETROS
+# 📍 FILTRO POR REFERÊNCIA
 # ======================================================
+
+with st.sidebar.expander("📍 Referência", expanded=True):
+
+    referencias = sorted(df["reference"].dropna().unique())
+
+    referencia_selecionada = st.selectbox(
+        "Selecionar Referência",
+        referencias
+    )
+
+df = df[df["reference"] == referencia_selecionada]
+
+# ======================================================
+# 🎯 FILTRO TILTÍMETROS
+# ======================================================
+
 tilt_devices = (
     df[df["tipo_sensor"].isin(["A-Axis Delta Angle", "B-Axis Delta Angle"])]
     ["device_name"].unique()
@@ -124,8 +147,9 @@ tilt_devices = (
 df = df[df["device_name"].isin(tilt_devices)]
 
 # ======================================================
-# 🎛️ DISPOSITIVO
+# 🎛️ DISPOSITIVOS
 # ======================================================
+
 with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     tipos_selecionados = st.multiselect(
@@ -137,6 +161,7 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
     df_tipo = df[df["tipo_sensor"].astype(str).isin(tipos_selecionados)]
 
     df_devices = df_tipo[["device_name", "status"]].drop_duplicates()
+
     df_devices["status_lower"] = df_devices["status"].astype(str).str.lower()
 
     df_devices["status_str"] = df_devices["status_lower"].map({
@@ -146,49 +171,20 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     df_devices["label"] = df_devices["device_name"] + " – " + df_devices["status_str"]
 
-    # 🔎 FILTRO ONLINE / OFFLINE
-    col1, col2 = st.columns(2)
-
-    with col1:
-        filtro_online = st.checkbox("Online", value=True)
-
-    with col2:
-        filtro_offline = st.checkbox("Offline", value=True)
-
-    if filtro_online and not filtro_offline:
-        df_devices_filtrado = df_devices[df_devices["status_lower"] == "online"]
-    elif filtro_offline and not filtro_online:
-        df_devices_filtrado = df_devices[df_devices["status_lower"] == "offline"]
-    elif not filtro_online and not filtro_offline:
-        df_devices_filtrado = df_devices.iloc[0:0]
-    else:
-        df_devices_filtrado = df_devices
-
     device_label_map = dict(
-        zip(df_devices_filtrado["label"], df_devices_filtrado["device_name"])
+        zip(df_devices["label"], df_devices["device_name"])
     )
-
-    if "device_principal_label" not in st.session_state:
-        st.session_state["device_principal_label"] = (
-            sorted(device_label_map.keys())[0]
-            if len(device_label_map) > 0 else None
-        )
 
     device_principal_label = st.selectbox(
         "Selecionar Dispositivo Principal",
-        sorted(device_label_map.keys()),
-        key="device_principal_label"
+        sorted(device_label_map.keys())
     )
 
     device_principal = device_label_map[device_principal_label]
 
-    if "outros_labels" not in st.session_state:
-        st.session_state["outros_labels"] = []
-
     outros_labels = st.multiselect(
         "Adicionar Outros Dispositivos",
-        sorted(device_label_map.keys()),
-        key="outros_labels"
+        sorted(device_label_map.keys())
     )
 
 devices_selecionados = list(dict.fromkeys(
@@ -198,14 +194,16 @@ devices_selecionados = list(dict.fromkeys(
 df_final = df_tipo[df_tipo["device_name"].isin(devices_selecionados)].copy()
 
 # ======================================================
-# 📅 PERÍODO
+# PERÍODO
 # ======================================================
+
 with st.sidebar.expander("📅 Período de Análise", expanded=False):
 
     data_min = df_final["data_leitura"].min().date()
     data_max = df_final["data_leitura"].max().date()
 
     c1, c2 = st.columns(2)
+
     data_ini = c1.date_input("Data inicial", data_min)
     data_fim = c2.date_input("Data final", data_max)
 
@@ -215,8 +213,9 @@ df_final = df_final[
 ]
 
 # ======================================================
-# ⚙️ ESCALA PROFISSIONAL
+# ESCALA
 # ======================================================
+
 with st.sidebar.expander("⚙️ Visualização", expanded=False):
 
     modo_escala = st.radio(
@@ -227,136 +226,54 @@ with st.sidebar.expander("⚙️ Visualização", expanded=False):
 df_final["valor_grafico"] = df_final["valor_sensor"]
 
 if modo_escala == "Relativa (primeiro valor = zero)":
+
     refs = (
         df_final.sort_values("data_leitura")
         .groupby("sensor_id")["valor_sensor"]
         .first()
     )
+
     df_final["valor_grafico"] = (
         df_final["valor_sensor"] - df_final["sensor_id"].map(refs)
     )
 
 # ======================================================
-# HEADER – STATUS / BATERIA / ÚLTIMA TX
-# ======================================================
-info = df_final.sort_values("data_leitura").iloc[-1]
-
-status = str(info["status"]).lower()
-bateria = int(info["battery_percentage"]) if pd.notna(info["battery_percentage"]) else 0
-ultima_tx = info["last_upload"]
-
-if pd.notna(ultima_tx):
-    ultima_tx = (ultima_tx - pd.Timedelta(hours=3)).strftime("%d-%m-%Y %H:%M:%S")
-
-cor_status = "#22c55e" if status == "online" else "#ef4444"
-
-if bateria >= 75:
-    cor_bateria = "#22c55e"
-elif bateria >= 40:
-    cor_bateria = "#facc15"
-else:
-    cor_bateria = "#ef4444"
-
-if len(devices_selecionados) == 1:
-    st.markdown(
-        f"""
-        <div style="display:flex;align-items:center;gap:14px;padding:8px 0;">
-        <h3 style="margin:0;">{device_principal}</h3>
-        <span style="background:{cor_status};color:white;padding:4px 10px;border-radius:6px;font-size:14px;">
-        {status.capitalize()}
-        </span>
-        <div style="display:flex;align-items:center;gap:6px;background:#f3f4f6;padding:4px 10px;border-radius:6px;">
-        <div style="width:28px;height:12px;border:2px solid #111;border-radius:3px;">
-        <div style="width:{bateria}%;height:100%;background:{cor_bateria};"></div>
-        </div>
-        <strong>{bateria}%</strong>
-        </div>
-        <span style="color:#f97316;font-size:16px;">
-        ⏱ Última transmissão: {ultima_tx}
-        </span>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-# ===============================
 # GRÁFICO
-# ===============================
-df_final["serie"] = df_final["device_name"].astype(str) + " | " + df_final["tipo_sensor"].astype(str)
+# ======================================================
+
+df_final["serie"] = df_final["device_name"] + " | " + df_final["tipo_sensor"]
 
 fig = go.Figure()
-
-devices_unicos = list(dict.fromkeys(df_final["device_name"].tolist()))
-device_index = {d: i for i, d in enumerate(devices_unicos)}
 
 for serie in df_final["serie"].unique():
 
     d = df_final[df_final["serie"] == serie]
+
     tipo = d["tipo_sensor"].iloc[0]
-    device = d["device_name"].iloc[0]
 
     eixo_secundario = tipo in ["Device Temperature", "Air Temperature"]
-
-    idx = device_index.get(device, 0)
-
-    if tipo == "A-Axis Delta Angle":
-        cor_final = ["#2563eb","#10b981","#06b6d4","#8b5cf6","#f43f5e"][idx % 5]
-    elif tipo == "B-Axis Delta Angle":
-        cor_final = ["#f97316","#ec4899","#eab308","#22c55e","#0ea5e9"][idx % 5]
-    elif tipo == "Device Temperature":
-        cor_final = ["#ef4444","#f59e0b","#14b8a6","#fb7185","#e11d48"][idx % 5]
-    elif tipo == "Air Temperature":
-        cor_final = ["#ef4444","#f59e0b","#14b8a6","#fb7185","#e11d48"][idx % 5]
-    else:
-        cor_final = "#000000"
 
     fig.add_trace(go.Scatter(
         x=d["data_leitura"],
         y=d["valor_grafico"],
         mode="lines",
         name=serie,
-        yaxis="y2" if eixo_secundario else "y",
-        line=dict(color=cor_final, dash="dash" if eixo_secundario else "solid"),
-        hovertemplate="<b>%{x|%d/%m/%Y %H:%M:%S}</b><br>%{fullData.name}<br>Valor: %{y:.4f}<extra></extra>"
+        yaxis="y2" if eixo_secundario else "y"
     ))
-
-label_y = "Valor Absoluto" if modo_escala == "Absoluta" else "Δ Valor Relativo"
 
 fig.update_layout(
     height=780,
     hovermode="x unified",
-    dragmode="pan",
-    legend=dict(orientation="h", y=-0.15, x=0.5, xanchor="center", title_text=""),
-    yaxis=dict(title=f"<b>{label_y}</b>"),
-    yaxis2=dict(title="<b>Temperatura (°C)</b>", overlaying="y", side="right")
+    yaxis=dict(title="Valor"),
+    yaxis2=dict(title="Temperatura (°C)", overlaying="y", side="right")
 )
 
-fig.update_xaxes(
-    showspikes=True,
-    spikemode="across",
-    spikesnap="cursor",
-    showgrid=False
-)
-
-fig.update_yaxes(
-    showspikes=True,
-    spikemode="across",
-    spikesnap="cursor",
-    showgrid=False
-)
-
-# 🔥 REMOVE GRID DO EIXO SECUNDÁRIO
-fig.update_layout(
-    yaxis2=dict(showgrid=False)
-)
-
-
-st.plotly_chart(fig, use_container_width=True,
-                config={"scrollZoom": True, "doubleClick": "reset", "displaylogo": False})
+st.plotly_chart(fig, use_container_width=True)
 
 # ======================================================
-# 🛰️ MAPA
+# MAPA
 # ======================================================
+
 st.subheader("🛰️ Localização dos Dispositivos")
 
 df_mapa = (
@@ -365,18 +282,12 @@ df_mapa = (
     .dropna(subset=["latitude", "longitude"])
 )
 
-df_mapa["cor"] = df_mapa["status"].astype(str).str.lower().apply(
-    lambda x: "#6ee7b7" if x == "online" else "#ef4444"
-)
-
 mapa = go.Figure(go.Scattermapbox(
     lat=df_mapa["latitude"],
     lon=df_mapa["longitude"],
     mode="markers+text",
-    marker=dict(size=20, color=df_mapa["cor"]),
-    text=df_mapa["device_name"],
-    textposition="top center",
-    textfont=dict(size=18, color="white")
+    marker=dict(size=20),
+    text=df_mapa["device_name"]
 ))
 
 mapa.update_layout(
@@ -385,20 +296,29 @@ mapa.update_layout(
         accesstoken=MAPBOX_TOKEN,
         style="satellite-streets",
         zoom=12,
-        center=dict(lat=df_mapa["latitude"].mean(), lon=df_mapa["longitude"].mean())
-    ),
-    margin=dict(l=0, r=0, t=0, b=0)
+        center=dict(
+            lat=df_mapa["latitude"].mean(),
+            lon=df_mapa["longitude"].mean()
+        )
+    )
 )
 
-st.plotly_chart(mapa, use_container_width=True, config={"scrollZoom": True})
+st.plotly_chart(mapa, use_container_width=True)
 
 # ======================================================
-# 📋 TABELA + EXPORTAÇÃO CSV
+# TABELA
 # ======================================================
+
 st.subheader("📋 Dados")
 
 st.dataframe(
-    df_final[["data_leitura", "device_name", "tipo_sensor", "valor_sensor", "valor_grafico"]],
+    df_final[[
+        "data_leitura",
+        "device_name",
+        "tipo_sensor",
+        "valor_sensor",
+        "valor_grafico"
+    ]],
     use_container_width=True
 )
 
