@@ -7,8 +7,9 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 # ======================================================
-# 🚨 FUNÇÃO DE CLASSIFICAÇÃO TARP
+# FUNÇÃO TARP
 # ======================================================
+
 def classificar_tarp(valor, limites):
     if valor >= limites.get("vermelho", float("inf")):
         return "Vermelho"
@@ -19,9 +20,11 @@ def classificar_tarp(valor, limites):
     else:
         return "Verde"
 
+
 # ======================================================
-# 🎨 CORES FIXAS
+# CORES
 # ======================================================
+
 CORES_SENSOR = {
     "A-Axis Delta Angle": "#2563eb",
     "B-Axis Delta Angle": "#f97316",
@@ -29,9 +32,10 @@ CORES_SENSOR = {
     "Air Temperature": "#ef4444"
 }
 
-# ===============================
+# ======================================================
 # AUTENTICAÇÃO
-# ===============================
+# ======================================================
+
 APP_PASSWORD = os.getenv("APP_PASSWORD", "orion123")
 
 if "auth_ok" not in st.session_state:
@@ -52,9 +56,10 @@ if not st.session_state.auth_ok:
 
     st.stop()
 
-# ===============================
+# ======================================================
 # ENV
-# ===============================
+# ======================================================
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
@@ -69,16 +74,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ===============================
+# ======================================================
 # BOTÃO ATUALIZAR
-# ===============================
+# ======================================================
+
 if st.sidebar.button("🔄 Atualizar Dados"):
     st.cache_data.clear()
     st.rerun()
 
-# ===============================
+# ======================================================
 # QUERY BANCO
-# ===============================
+# ======================================================
+
 @st.cache_data(ttl=300)
 def carregar_dados_db():
 
@@ -110,6 +117,7 @@ def carregar_dados_db():
 
     return pd.read_sql(query, engine)
 
+
 df = carregar_dados_db()
 
 if df.empty:
@@ -120,22 +128,30 @@ df["data_leitura"] = pd.to_datetime(df["data_leitura"]).dt.tz_localize(None)
 df["last_upload"] = pd.to_datetime(df["last_upload"], errors="coerce")
 
 # ======================================================
-# 📍 FILTRO POR REFERÊNCIA
+# FILTRO RAMAL
 # ======================================================
 
-with st.sidebar.expander("📍 Referência", expanded=True):
+with st.sidebar.expander("📍 Ramal", expanded=True):
 
-    referencias = sorted(df["reference"].dropna().unique())
+    ramais = [
+        "LPR - Brito",
+        "LPR - Renan",
+        "LPR - Witheney",
+        "RBH - José",
+        "RBR - José",
+        "RFA - Léo Silva",
+        "RFA - Thiago"
+    ]
 
-    referencia_selecionada = st.selectbox(
-        "Selecionar Referência",
-        referencias
+    ramal_selecionado = st.selectbox(
+        "Selecionar Ramal",
+        ramais
     )
 
-df = df[df["reference"] == referencia_selecionada]
+df = df[df["reference"] == ramal_selecionado]
 
 # ======================================================
-# 🎯 FILTRO TILTÍMETROS
+# FILTRO TILT
 # ======================================================
 
 tilt_devices = (
@@ -146,7 +162,7 @@ tilt_devices = (
 df = df[df["device_name"].isin(tilt_devices)]
 
 # ======================================================
-# 🎛️ DISPOSITIVOS
+# DISPOSITIVOS
 # ======================================================
 
 with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
@@ -174,7 +190,7 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
 
     labels = sorted(device_label_map.keys())
 
-    selecionar_todos = st.checkbox("Selecionar todos os dispositivos desta referência")
+    selecionar_todos = st.checkbox("Selecionar todos os dispositivos deste ramal")
 
     if selecionar_todos:
 
@@ -273,7 +289,15 @@ fig.update_layout(
     hovermode="x unified",
     dragmode="pan",
     yaxis=dict(title="Valor"),
-    yaxis2=dict(title="Temperatura (°C)", overlaying="y", side="right")
+    yaxis2=dict(title="Temperatura (°C)", overlaying="y", side="right"),
+    legend=dict(
+        orientation="h",
+        yanchor="top",
+        y=-0.25,
+        xanchor="center",
+        x=0.5
+    ),
+    margin=dict(b=120)
 )
 
 fig.update_xaxes(showspikes=True)
