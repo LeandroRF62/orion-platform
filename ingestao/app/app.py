@@ -78,44 +78,49 @@ df_raw["data_leitura"] = pd.to_datetime(df_raw["data_leitura"]).dt.tz_localize(N
 # ======================================================
 st.sidebar.button("🔄 Atualizar Dados", on_click=st.cache_data.clear)
 
+# 1. FILTRO DE RAMAL (ESTRITO)
 with st.sidebar.expander("📍 Ramal", expanded=True):
-    # Lista estrita conforme as imagens fornecidas
     opcoes_ramais = [
-        "Humberto - S11D",
-        "LPR - Brito",
-        "LPR - Renan",
-        "LPR - Witheney",
-        "RBH - José",
-        "RBR - José",
-        "RFA - Léo Silva",
-        "RFA - Thiago"
+        "Humberto - S11D", "LPR - Brito", "LPR - Renan", "LPR - Witheney",
+        "RBH - José", "RBR - José", "RFA - Léo Silva", "RFA - Thiago"
     ]
     ramal_selecionado = st.selectbox("Selecionar Ramal", opcoes_ramais)
 
-df = df_raw[df_raw["reference"] == ramal_selecionado]
+df_ramal = df_raw[df_raw["reference"] == ramal_selecionado]
 
-if df.empty:
+if df_ramal.empty:
     st.info(f"Nenhum dado encontrado para {ramal_selecionado}.")
     st.stop()
 
+# 2. NOVO: FILTRO DE STATUS (ONLINE/OFFLINE)
+with st.sidebar.expander("📶 Status de Conexão", expanded=True):
+    status_disponiveis = df_ramal["status"].unique().tolist()
+    status_selecionados = st.multiselect("Filtrar por Status", status_disponiveis, default=status_disponiveis)
+
+df_status = df_ramal[df_ramal["status"].isin(status_selecionados)]
+
+# 3. FILTRO DE DISPOSITIVO
 with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
-    tipos_disponiveis = sorted(df["tipo_sensor"].unique())
+    tipos_disponiveis = sorted(df_status["tipo_sensor"].unique())
     tipos_selecionados = st.multiselect("Variáveis", tipos_disponiveis, default=tipos_disponiveis)
     
-    # Lógica de seleção de dispositivos
-    dispositivos_no_ramal = sorted(df["device_name"].unique())
-    selecionar_todos = st.checkbox("Selecionar todos deste ramal")
+    dispositivos_filtrados = sorted(df_status["device_name"].unique())
+    if not dispositivos_filtrados:
+        st.warning("Nenhum dispositivo com este status.")
+        st.stop()
+        
+    selecionar_todos = st.checkbox("Selecionar todos deste ramal/status")
     
     if selecionar_todos:
-        devices_selecionados = dispositivos_no_ramal
+        devices_selecionados = dispositivos_filtrados
     else:
-        dev_principal = st.selectbox("Dispositivo Principal", dispositivos_no_ramal)
-        outros = st.multiselect("Adicionar Outros", [d for d in dispositivos_no_ramal if d != dev_principal])
+        dev_principal = st.selectbox("Dispositivo Principal", dispositivos_filtrados)
+        outros = st.multiselect("Adicionar Outros", [d for d in dispositivos_filtrados if d != dev_principal])
         devices_selecionados = [dev_principal] + outros
 
-df_final = df[(df["device_name"].isin(devices_selecionados)) & (df["tipo_sensor"].isin(tipos_selecionados))].copy()
+df_final = df_status[(df_status["device_name"].isin(devices_selecionados)) & (df_status["tipo_sensor"].isin(tipos_selecionados))].copy()
 
-# Filtro de Data e Escala
+# Período e Escala
 data_min, data_max = df_final["data_leitura"].min().date(), df_final["data_leitura"].max().date()
 with st.sidebar.expander("📅 Período"):
     d_ini = st.date_input("Início", data_min)
@@ -159,44 +164,32 @@ fig.update_layout(height=650, hovermode="x unified",
 st.plotly_chart(fig, use_container_width=True)
 
 # ======================================================
-# MAPA ATUALIZADO (Zoom e Letras Brancas)
+# MAPA (Zoom e Letras Brancas)
 # ======================================================
 st.subheader("🛰️ Localização dos Dispositivos")
-
 df_mapa = df_final[["device_name", "latitude", "longitude", "status"]].drop_duplicates().dropna()
 df_mapa["cor_ponto"] = df_mapa["status"].str.lower().apply(lambda x: "#00FF00" if x == "online" else "#FF0000")
 
 fig_mapa = go.Figure(go.Scattermapbox(
-    lat=df_mapa["latitude"],
-    lon=df_mapa["longitude"],
+    lat=df_mapa["latitude"], lon=df_mapa["longitude"],
     mode="markers+text",
     marker=dict(size=12, color=df_mapa["cor_ponto"], opacity=0.9),
     text=df_mapa["device_name"],
-    # Estilização da Letra: Branca com contorno preto para leitura em satélite
     textfont=dict(size=14, color="white"), 
     textposition="top center",
     hoverinfo="text"
 ))
 
 fig_mapa.update_layout(
-    height=600,
-    margin=dict(l=0, r=0, t=0, b=0),
+    height=600, margin=dict(l=0, r=0, t=0, b=0),
     mapbox=dict(
-        accesstoken=MAPBOX_TOKEN,
-        style="satellite-streets",
-        zoom=15,
+        accesstoken=MAPBOX_TOKEN, style="satellite-streets", zoom=15,
         center=dict(lat=df_mapa["latitude"].mean(), lon=df_mapa["longitude"].mean()),
     ),
     showlegend=False
 )
 
-# use_container_width garante que o gráfico ocupe a tela
-# config habilita o scrollZoom explicitamente
-st.plotly_chart(fig_mapa, use_container_width=True, config={
-    'scrollZoom': True, 
-    'displayModeBar': True,
-    'modeBarButtonsToAdd': ['drawline', 'drawopenpath', 'drawclosedpath', 'drawcircle', 'drawrect', 'eraselayer']
-})
+st.plotly_chart(fig_mapa, use_container_width=True, config={'scrollZoom': True})
 
 # ======================================================
 # TABELA E DOWNLOAD
