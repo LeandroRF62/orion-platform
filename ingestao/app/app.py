@@ -296,6 +296,7 @@ for serie in df_final["serie"].unique():
         y=d["valor_grafico"],
         mode="lines",
         name=serie,
+        line=dict(color=CORES_SENSOR.get(tipo, "#6b7280")),
         yaxis="y2" if eixo_secundario else "y"
     ))
 
