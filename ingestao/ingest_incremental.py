@@ -7,6 +7,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # ======================================================
 # CONFIG
@@ -30,7 +31,6 @@ ultimo_request = 0
 
 
 def aguardar_rate_limit():
-
     global ultimo_request
 
     with api_lock:
@@ -53,7 +53,7 @@ session = requests.Session()
 retries = Retry(
     total=3,
     backoff_factor=1,
-    status_forcelist=[500,502,503,504],
+    status_forcelist=[500, 502, 503, 504],
     allowed_methods=["GET"]
 )
 
@@ -61,14 +61,13 @@ adapter = HTTPAdapter(max_retries=retries)
 
 session.mount("https://", adapter)
 
-
 # ======================================================
 # DB POOL
 # ======================================================
 
 db_pool = SimpleConnectionPool(
     minconn=1,
-    maxconn=MAX_WORKERS+2,
+    maxconn=MAX_WORKERS + 2,
     dsn=DATABASE_URL
 )
 
@@ -131,18 +130,11 @@ def cadastrar_devices(token):
 
     devices = r.json()
 
-    print(f"📊 Devices recebidos da API: {len(devices)}")
+    print(f"📊 Devices recebidos: {len(devices)}")
 
     for device in devices:
 
         reference = device.get("reference")
-
-        print(
-            f"DEBUG DEVICE | "
-            f"id={device['deviceId']} "
-            f"name={device.get('deviceName')} "
-            f"reference={reference}"
-        )
 
         cur.execute("""
             INSERT INTO devices(
@@ -178,16 +170,133 @@ def cadastrar_devices(token):
             reference
         ))
 
-        print(
-            f"💾 Device salvo | id={device['deviceId']} reference={reference}"
-        )
-
     conn.commit()
 
     cur.close()
     release_conn(conn)
 
     print("✅ Devices sincronizados")
+
+
+# ======================================================
+# ULTIMA DATA
+# ======================================================
+
+def obter_ultima_data():
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT MAX(timestamp)
+        FROM device_data
+    """)
+
+    result = cur.fetchone()
+
+    cur.close()
+    release_conn(conn)
+
+    if result[0] is None:
+        return datetime.utcnow() - timedelta(days=30)
+
+    return result[0]
+
+
+# ======================================================
+# BUSCAR DADOS
+# ======================================================
+
+def buscar_dados(token, device_id, data_inicio):
+
+    aguardar_rate_limit()
+
+    r = session.get(
+        f"{BASE_URL}/DeviceData",
+        headers={"Authorization": f"Bearer {token}"},
+        params={
+            "deviceId": device_id,
+            "from": data_inicio.isoformat()
+        },
+        timeout=REQUEST_TIMEOUT
+    )
+
+    r.raise_for_status()
+
+    return r.json()
+
+
+# ======================================================
+# SALVAR DADOS
+# ======================================================
+
+def salvar_dados(device_id, dados):
+
+    if not dados:
+        return
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    for d in dados:
+
+        cur.execute("""
+            INSERT INTO device_data(
+                device_id,
+                timestamp,
+                parameter,
+                value
+            )
+            VALUES(%s,%s,%s,%s)
+            ON CONFLICT DO NOTHING
+        """,(
+            device_id,
+            d.get("timestamp"),
+            d.get("parameter"),
+            d.get("value")
+        ))
+
+    conn.commit()
+
+    cur.close()
+    release_conn(conn)
+
+
+# ======================================================
+# PROCESSAR DEVICE
+# ======================================================
+
+def processar_device(token, device_id, data_inicio):
+
+    print(f"⬇️ Baixando dados device {device_id}")
+
+    dados = buscar_dados(token, device_id, data_inicio)
+
+    salvar_dados(device_id, dados)
+
+    print(f"✅ Device {device_id} atualizado")
+
+
+# ======================================================
+# LISTAR DEVICES
+# ======================================================
+
+def listar_devices():
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT device_id
+        FROM devices
+    """)
+
+    rows = cur.fetchall()
+
+    cur.close()
+    release_conn(conn)
+
+    return [r[0] for r in rows]
 
 
 # ======================================================
@@ -202,4 +311,28 @@ if __name__ == "__main__":
 
     cadastrar_devices(token)
 
-    print("🏁 FINALIZADO")
+    data_inicio = obter_ultima_data()
+
+    print(f"📅 Buscando dados desde {data_inicio}")
+
+    devices = listar_devices()
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+
+        futures = []
+
+        for device_id in devices:
+
+            futures.append(
+                executor.submit(
+                    processar_device,
+                    token,
+                    device_id,
+                    data_inicio
+                )
+            )
+
+        for f in futures:
+            f.result()
+
+    print("🏁 INGEST FINALIZADO")
