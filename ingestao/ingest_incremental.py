@@ -32,13 +32,14 @@ TIPOS_VALIDOS = (
 )
 
 # ======================================================
-# RATE LIMIT GLOBAL
+# RATE LIMIT ORION
 # ======================================================
 
 API_MIN_INTERVAL = 0.6
 
 api_lock = threading.Lock()
 ultimo_request = 0
+
 
 def aguardar_rate_limit():
 
@@ -53,6 +54,7 @@ def aguardar_rate_limit():
             time.sleep(API_MIN_INTERVAL - delta)
 
         ultimo_request = time.time()
+
 
 # ======================================================
 # SESSION
@@ -83,9 +85,11 @@ db_pool = SimpleConnectionPool(
 
 pool_lock = threading.Lock()
 
+
 def get_conn():
     with pool_lock:
         return db_pool.getconn()
+
 
 def release_conn(conn):
     with pool_lock:
@@ -119,8 +123,8 @@ def obter_token():
 
 def carregar_sync_state():
 
-    conn=get_conn()
-    cur=conn.cursor()
+    conn = get_conn()
+    cur = conn.cursor()
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS sync_state(
@@ -131,12 +135,12 @@ def carregar_sync_state():
 
     cur.execute("SELECT sensor_id,last_timestamp FROM sync_state")
 
-    rows=cur.fetchall()
+    rows = cur.fetchall()
 
     cur.close()
     release_conn(conn)
 
-    mapa={}
+    mapa = {}
 
     for sid,ts in rows:
 
@@ -172,7 +176,7 @@ def cadastrar_devices_e_sensores(token):
 
     for device in r.json():
 
-        reference = device.get("reference")
+        reference=device.get("reference")
 
         cur.execute("""
         INSERT INTO devices(
@@ -239,10 +243,7 @@ def cadastrar_devices_e_sensores(token):
             ))
 
         if sensores_validos:
-            mapa_devices[device["deviceId"]] = {
-                "sensors": sensores_validos,
-                "reference": reference
-            }
+            mapa_devices[device["deviceId"]]={"sensors":sensores_validos,"reference":reference}
 
     conn.commit()
 
@@ -294,8 +295,7 @@ def worker_device(token,device_id,device_info,sync_map,agora):
         )
 
         if r.status_code==429:
-
-            print("⏳ RATE LIMIT atingido, aguardando...")
+            print("⏳ RATE LIMIT atingido")
             time.sleep(5)
             continue
 
@@ -308,10 +308,7 @@ def worker_device(token,device_id,device_info,sync_map,agora):
         if qtd==0:
             break
 
-        registros=[
-            (d["sensorId"],d["readingDate"],d["sensorValue"])
-            for d in dados
-        ]
+        registros=[(d["sensorId"],d["readingDate"],d["sensorValue"]) for d in dados]
 
         execute_batch(cur,"""
         INSERT INTO leituras(sensor,data_leitura,valor_sensor)
@@ -329,8 +326,7 @@ def worker_device(token,device_id,device_info,sync_map,agora):
         conn.commit()
 
         total_local+=qtd
-
-        offset += qtd
+        offset+=qtd
 
     print(f"✅ Device {device_id} ({reference}) finalizado - {total_local} leituras")
 
@@ -369,7 +365,6 @@ def baixar_e_salvar_leituras(token,mapa_devices):
             )
 
         for f in as_completed(futures):
-
             total+=f.result()
 
     print(f"\n🌌 TOTAL GLOBAL: {total}")
@@ -380,7 +375,7 @@ def baixar_e_salvar_leituras(token,mapa_devices):
 
 if __name__=="__main__":
 
-    print("🚀 ORION COSMIC ENGINE V6 START")
+    print("🚀 ORION COSMIC ENGINE START")
 
     token=obter_token()
 
