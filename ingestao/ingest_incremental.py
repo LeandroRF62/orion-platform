@@ -20,7 +20,6 @@ BASE_URL = "https://api.oriondata.io/api"
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 DATA_INICIAL_HISTORICO = "2026-01-30T00:00:00"
-
 REQUEST_TIMEOUT = 30
 MAX_WORKERS = 4
 
@@ -31,30 +30,20 @@ TIPOS_VALIDOS = (
     "Device Temperature"
 )
 
-# ======================================================
-# RATE LIMIT ORION
-# ======================================================
-
-API_MIN_INTERVAL = 0.6
+# 🔥 RATE LIMIT GLOBAL ORION (ANTI 429)
+API_MIN_INTERVAL = 0.6  # segundos entre requests globais
 
 api_lock = threading.Lock()
 ultimo_request = 0
 
-
 def aguardar_rate_limit():
-
     global ultimo_request
-
     with api_lock:
-
         agora = time.time()
         delta = agora - ultimo_request
-
         if delta < API_MIN_INTERVAL:
             time.sleep(API_MIN_INTERVAL - delta)
-
         ultimo_request = time.time()
-
 
 # ======================================================
 # SESSION
@@ -65,12 +54,11 @@ session = requests.Session()
 retries = Retry(
     total=3,
     backoff_factor=1,
-    status_forcelist=[500,502,503,504],
+    status_forcelist=[500, 502, 503, 504],
     allowed_methods=["GET"]
 )
 
 adapter = HTTPAdapter(max_retries=retries)
-
 session.mount("https://", adapter)
 
 # ======================================================
@@ -79,17 +67,15 @@ session.mount("https://", adapter)
 
 db_pool = SimpleConnectionPool(
     minconn=1,
-    maxconn=MAX_WORKERS+2,
+    maxconn=MAX_WORKERS + 2,
     dsn=DATABASE_URL
 )
 
 pool_lock = threading.Lock()
 
-
 def get_conn():
     with pool_lock:
         return db_pool.getconn()
-
 
 def release_conn(conn):
     with pool_lock:
@@ -100,9 +86,7 @@ def release_conn(conn):
 # ======================================================
 
 def obter_token():
-
     print("🔐 Obtendo token...")
-
     aguardar_rate_limit()
 
     r = session.get(
@@ -114,41 +98,38 @@ def obter_token():
     r.raise_for_status()
 
     print("✅ Token obtido")
-
     return r.json()["token"]
 
 # ======================================================
-# SYNC STATE
+# SYNC STATE & DB INIT
 # ======================================================
 
 def carregar_sync_state():
-
     conn = get_conn()
     cur = conn.cursor()
 
+    # Garante que a coluna 'reference' existe na tabela devices
+    cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS reference TEXT;")
+
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS sync_state(
-        sensor_id BIGINT PRIMARY KEY,
-        last_timestamp TIMESTAMP
-    );
+        CREATE TABLE IF NOT EXISTS sync_state(
+            sensor_id BIGINT PRIMARY KEY,
+            last_timestamp TIMESTAMP
+        );
     """)
 
-    cur.execute("SELECT sensor_id,last_timestamp FROM sync_state")
-
+    cur.execute("SELECT sensor_id, last_timestamp FROM sync_state;")
     rows = cur.fetchall()
 
     cur.close()
     release_conn(conn)
 
     mapa = {}
-
-    for sid,ts in rows:
-
+    for sid, ts in rows:
         if ts:
-            mapa[sid]=(ts-timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
+            mapa[sid] = (ts - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
 
     print(f"🧠 Sync_state carregado: {len(mapa)} sensores")
-
     return mapa
 
 # ======================================================
@@ -156,43 +137,49 @@ def carregar_sync_state():
 # ======================================================
 
 def cadastrar_devices_e_sensores(token):
+    conn = get_conn()
+    cur = conn.cursor()
 
-    conn=get_conn()
-    cur=conn.cursor()
-
-    print("📡 Atualizando devices...")
+    print("📡 Atualizando devices (incluindo referências)...")
 
     aguardar_rate_limit()
 
-    r=session.get(
+    r = session.get(
         f"{BASE_URL}/UserDevices",
-        headers={"Authorization":f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}"},
         timeout=REQUEST_TIMEOUT
     )
 
     r.raise_for_status()
 
-    mapa_devices={}
+    mapa_devices = {}
 
     for device in r.json():
-
-        reference=device.get("reference")
-
+        # Adicionado 'reference' no INSERT e no UPDATE
         cur.execute("""
-        INSERT INTO devices(
-            device_id,device_name,serial_number,status,
-            latitude,longitude,last_upload,battery_percentage,reference
-        )
-        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT(device_id) DO UPDATE SET
-            device_name=EXCLUDED.device_name,
-            status=EXCLUDED.status,
-            latitude=EXCLUDED.latitude,
-            longitude=EXCLUDED.longitude,
-            last_upload=EXCLUDED.last_upload,
-            battery_percentage=EXCLUDED.battery_percentage,
-            reference=EXCLUDED.reference;
-        """,(
+            INSERT INTO devices(
+                device_id,
+                device_name,
+                serial_number,
+                status,
+                latitude,
+                longitude,
+                last_upload,
+                battery_percentage,
+                reference
+            )
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)
+
+            ON CONFLICT(device_id) DO UPDATE SET
+                device_name = EXCLUDED.device_name,
+                status = EXCLUDED.status,
+                latitude = EXCLUDED.latitude,
+                longitude = EXCLUDED.longitude,
+                last_upload = EXCLUDED.last_upload,
+                battery_percentage = EXCLUDED.battery_percentage,
+                reference = EXCLUDED.reference;
+        """,
+        (
             device["deviceId"],
             device["deviceName"],
             device.get("serialNumber"),
@@ -201,40 +188,47 @@ def cadastrar_devices_e_sensores(token):
             device.get("longitude"),
             device.get("lastUpload"),
             device.get("batteryPercentage"),
-            reference
+            device.get("reference")  # <--- Dado da Orion API
         ))
 
-        processar_alertas_status(conn,device["deviceId"],device.get("status"))
+        processar_alertas_status(
+            conn,
+            device["deviceId"],
+            device.get("status")
+        )
 
-        sensores_validos=[]
+        sensores_validos = []
 
-        for sensor in device.get("sensors",[]):
+        for sensor in device.get("sensors", []):
+            canal = str(sensor.get("channelNumber")).strip()
+            tipo = (sensor.get("sensorType") or "").strip()
 
-            canal=str(sensor.get("channelNumber")).strip()
-            tipo=(sensor.get("sensorType") or "").strip()
-
-            if canal not in ("1","2","3"):
+            if canal not in ("1", "2", "3"):
                 continue
 
             if tipo not in TIPOS_VALIDOS:
                 continue
 
-            sid=sensor["sensorId"]
-
+            sid = sensor["sensorId"]
             sensores_validos.append(sid)
 
             cur.execute("""
-            INSERT INTO sensores(
-                sensor_id,device_id,nome_customizado,
-                tipo_sensor,unidade_medida
-            )
-            VALUES(%s,%s,%s,%s,%s)
-            ON CONFLICT(sensor_id) DO UPDATE SET
-                device_id=EXCLUDED.device_id,
-                nome_customizado=EXCLUDED.nome_customizado,
-                tipo_sensor=EXCLUDED.tipo_sensor,
-                unidade_medida=EXCLUDED.unidade_medida;
-            """,(
+                INSERT INTO sensores(
+                    sensor_id,
+                    device_id,
+                    nome_customizado,
+                    tipo_sensor,
+                    unidade_medida
+                )
+                VALUES(%s,%s,%s,%s,%s)
+
+                ON CONFLICT(sensor_id) DO UPDATE SET
+                    device_id = EXCLUDED.device_id,
+                    nome_customizado = EXCLUDED.nome_customizado,
+                    tipo_sensor = EXCLUDED.tipo_sensor,
+                    unidade_medida = EXCLUDED.unidade_medida;
+            """,
+            (
                 sid,
                 device["deviceId"],
                 sensor.get("customName") or f"Sensor {sid}",
@@ -243,144 +237,141 @@ def cadastrar_devices_e_sensores(token):
             ))
 
         if sensores_validos:
-            mapa_devices[device["deviceId"]]={"sensors":sensores_validos,"reference":reference}
+            mapa_devices[device["deviceId"]] = sensores_validos
 
     conn.commit()
-
     cur.close()
     release_conn(conn)
 
-    print(f"✅ Devices válidos: {len(mapa_devices)}")
-
+    print(f"✅ Devices tiltímetro válidos: {len(mapa_devices)}")
     return mapa_devices
 
 # ======================================================
-# WORKER DEVICE
+# WORKER DEVICE (ANTI 429)
 # ======================================================
 
-def worker_device(token,device_id,device_info,sync_map,agora):
+def worker_device(token, device_id, sensor_ids, sync_map, agora):
+    conn = get_conn()
+    cur = conn.cursor()
 
-    conn=get_conn()
-    cur=conn.cursor()
+    headers = {"Authorization": f"Bearer {token}"}
 
-    sensores=device_info["sensors"]
-    reference=device_info["reference"]
+    inicio = min([
+        sync_map.get(s, DATA_INICIAL_HISTORICO)
+        for s in sensor_ids
+    ])
 
-    headers={"Authorization":f"Bearer {token}"}
+    sensor_param = ",".join(map(str, sensor_ids))
+    offset = 0
+    total_local = 0
 
-    inicio=min([sync_map.get(s,DATA_INICIAL_HISTORICO) for s in sensores])
-
-    sensor_param=",".join(map(str,sensores))
-
-    offset=0
-    total_local=0
-
-    print(f"🛰️ Device {device_id} ({reference}) iniciando")
+    print(f"🛰️ Device {device_id} iniciando leitura de dados")
 
     while True:
-
         aguardar_rate_limit()
 
-        r=session.get(
+        r = session.get(
             f"{BASE_URL}/SensorData",
             headers=headers,
             params={
-                "version":"1.3",
-                "startDate":inicio,
-                "endDate":agora,
-                "offset":offset,
-                "sensorIds":sensor_param
+                "version": "1.3",
+                "startDate": inicio,
+                "endDate": agora,
+                "offset": offset,
+                "sensorIds": sensor_param
             },
             timeout=REQUEST_TIMEOUT
         )
 
-        if r.status_code==429:
-            print("⏳ RATE LIMIT atingido")
+        if r.status_code == 429:
+            print(f"⏳ RATE LIMIT em {device_id}, aguardando 5s...")
             time.sleep(5)
             continue
 
         r.raise_for_status()
+        dados = r.json()
+        qtd = len(dados)
 
-        dados=r.json()
-
-        qtd=len(dados)
-
-        if qtd==0:
+        if qtd == 0:
             break
 
-        registros=[(d["sensorId"],d["readingDate"],d["sensorValue"]) for d in dados]
+        registros = [
+            (d["sensorId"], d["readingDate"], d["sensorValue"])
+            for d in dados
+        ]
 
-        execute_batch(cur,"""
-        INSERT INTO leituras(sensor,data_leitura,valor_sensor)
-        VALUES(%s,%s,%s)
-        ON CONFLICT(sensor,data_leitura) DO NOTHING
-        """,registros,page_size=500)
+        execute_batch(
+            cur,
+            """
+            INSERT INTO leituras(sensor_id,data_leitura,valor_sensor)
+            VALUES(%s,%s,%s)
+            ON CONFLICT(sensor_id,data_leitura) DO NOTHING
+            """,
+            registros,
+            page_size=500
+        )
 
-        execute_batch(cur,"""
-        INSERT INTO sync_state(sensor_id,last_timestamp)
-        VALUES(%s,%s)
-        ON CONFLICT(sensor_id)
-        DO UPDATE SET last_timestamp=EXCLUDED.last_timestamp
-        """,[(r[0],r[1]) for r in registros])
+        execute_batch(
+            cur,
+            """
+            INSERT INTO sync_state(sensor_id,last_timestamp)
+            VALUES(%s,%s)
+            ON CONFLICT(sensor_id)
+            DO UPDATE SET last_timestamp = EXCLUDED.last_timestamp
+            """,
+            [(r[0], r[1]) for r in registros]
+        )
 
         conn.commit()
-
-        total_local+=qtd
-        offset+=qtd
-
-    print(f"✅ Device {device_id} ({reference}) finalizado - {total_local} leituras")
+        total_local += qtd
+        offset += 1
 
     cur.close()
     release_conn(conn)
-
     return total_local
 
 # ======================================================
 # INGESTÃO
 # ======================================================
 
-def baixar_e_salvar_leituras(token,mapa_devices):
-
-    sync_map=carregar_sync_state()
-
-    agora=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-
-    total=0
+def baixar_e_salvar_leituras(token, mapa_devices):
+    sync_map = carregar_sync_state()
+    agora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    total = 0
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-
-        futures=[]
-
-        for device_id,info in mapa_devices.items():
-
+        futures = []
+        for device_id, sensors in mapa_devices.items():
             futures.append(
                 executor.submit(
                     worker_device,
                     token,
                     device_id,
-                    info,
+                    sensors,
                     sync_map,
                     agora
                 )
             )
 
         for f in as_completed(futures):
-            total+=f.result()
+            try:
+                total += f.result()
+            except Exception as e:
+                print(f"❌ Erro em worker: {e}")
 
-    print(f"\n🌌 TOTAL GLOBAL: {total}")
+    print(f"🌌 TOTAL DE LEITURAS PROCESSADAS: {total}")
 
 # ======================================================
 # MAIN
 # ======================================================
 
-if __name__=="__main__":
-
-    print("🚀 ORION COSMIC ENGINE START")
-
-    token=obter_token()
-
-    mapa_devices=cadastrar_devices_e_sensores(token)
-
-    baixar_e_salvar_leituras(token,mapa_devices)
-
-    print("\n🏁 FINALIZADO")
+if __name__ == "__main__":
+    print("🚀 ORION COSMIC ENGINE V5 START")
+    
+    try:
+        token = obter_token()
+        mapa_devices = cadastrar_devices_e_sensores(token)
+        baixar_e_salvar_leituras(token, mapa_devices)
+        print("\n🏁 PROCESSO FINALIZADO COM SUCESSO")
+    except Exception as e:
+        print(f"\n💥 ERRO FATAL: {e}")
