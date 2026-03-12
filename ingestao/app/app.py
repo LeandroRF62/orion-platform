@@ -78,7 +78,6 @@ df_raw["data_leitura"] = pd.to_datetime(df_raw["data_leitura"]).dt.tz_localize(N
 # ======================================================
 st.sidebar.button("🔄 Atualizar Dados", on_click=st.cache_data.clear)
 
-# 1. FILTRO DE RAMAL (ESTRITO)
 with st.sidebar.expander("📍 Ramal", expanded=True):
     opcoes_ramais = [
         "Humberto - S11D", "LPR - Brito", "LPR - Renan", "LPR - Witheney",
@@ -92,14 +91,12 @@ if df_ramal.empty:
     st.info(f"Nenhum dado encontrado para {ramal_selecionado}.")
     st.stop()
 
-# 2. NOVO: FILTRO DE STATUS (ONLINE/OFFLINE)
 with st.sidebar.expander("📶 Status de Conexão", expanded=True):
     status_disponiveis = df_ramal["status"].unique().tolist()
     status_selecionados = st.multiselect("Filtrar por Status", status_disponiveis, default=status_disponiveis)
 
 df_status = df_ramal[df_ramal["status"].isin(status_selecionados)]
 
-# 3. FILTRO DE DISPOSITIVO
 with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
     tipos_disponiveis = sorted(df_status["tipo_sensor"].unique())
     tipos_selecionados = st.multiselect("Variáveis", tipos_disponiveis, default=tipos_disponiveis)
@@ -136,7 +133,7 @@ else:
     df_final["valor_grafico"] = df_final["valor_sensor"]
 
 # ======================================================
-# GRÁFICO PRINCIPAL
+# GRÁFICO PRINCIPAL (COM ZOOM NO EIXO Y HABILITADO)
 # ======================================================
 fig = go.Figure()
 num_devs = len(devices_selecionados)
@@ -144,7 +141,7 @@ dev_col_map = {dev: PALETA_DEVICES[i % len(PALETA_DEVICES)] for i, dev in enumer
 
 for serie in (df_final["device_name"] + " | " + df_final["tipo_sensor"]).unique():
     d_plot = df_final[(df_final["device_name"] + " | " + df_final["tipo_sensor"]) == serie]
-    tipo = d_plot["tipo_sensor"].iloc[0]
+    tipo = d_p_tipo = d_plot["tipo_sensor"].iloc[0]
     nome_dev = d_plot["device_name"].iloc[0]
     
     eixo_2 = "Temperature" in tipo
@@ -157,11 +154,28 @@ for serie in (df_final["device_name"] + " | " + df_final["tipo_sensor"]).unique(
     fig.add_trace(go.Scatter(x=d_plot["data_leitura"], y=d_plot["valor_grafico"], 
                              name=serie, line=style, yaxis="y2" if eixo_2 else "y"))
 
-fig.update_layout(height=650, hovermode="x unified",
-                  yaxis=dict(title="Leitura"), yaxis2=dict(title="Temp (°C)", overlaying="y", side="right"),
-                  legend=dict(orientation="h", y=-0.2))
+fig.update_layout(
+    height=650, 
+    hovermode="x unified",
+    # fixedrange=False permite o zoom no eixo individualmente
+    yaxis=dict(title="Leitura", fixedrange=False), 
+    yaxis2=dict(title="Temp (°C)", overlaying="y", side="right", fixedrange=False),
+    xaxis=dict(title="Data/Hora", fixedrange=False),
+    legend=dict(orientation="h", y=-0.2)
+)
 
-st.plotly_chart(fig, use_container_width=True)
+# Configurações para habilitar ferramentas de zoom Y na barra de ferramentas (Modebar)
+st.plotly_chart(fig, use_container_width=True, config={
+    'scrollZoom': True,           # Permite zoom com o scroll do mouse
+    'displayModeBar': True,       # Garante que a barra de ferramentas apareça
+    'modeBarButtonsToAdd': [
+        'zoomIn2d', 
+        'zoomOut2d', 
+        'autoScale2d'
+    ],
+    'modeBarButtonsToRemove': [],
+    'displaylogo': False
+})
 
 # ======================================================
 # MAPA (Zoom e Letras Brancas)
@@ -170,26 +184,26 @@ st.subheader("🛰️ Localização dos Dispositivos")
 df_mapa = df_final[["device_name", "latitude", "longitude", "status"]].drop_duplicates().dropna()
 df_mapa["cor_ponto"] = df_mapa["status"].str.lower().apply(lambda x: "#00FF00" if x == "online" else "#FF0000")
 
-fig_mapa = go.Figure(go.Scattermapbox(
-    lat=df_mapa["latitude"], lon=df_mapa["longitude"],
-    mode="markers+text",
-    marker=dict(size=12, color=df_mapa["cor_ponto"], opacity=0.9),
-    text=df_mapa["device_name"],
-    textfont=dict(size=14, color="white"), 
-    textposition="top center",
-    hoverinfo="text"
-))
+if not df_mapa.empty:
+    fig_mapa = go.Figure(go.Scattermapbox(
+        lat=df_mapa["latitude"], lon=df_mapa["longitude"],
+        mode="markers+text",
+        marker=dict(size=12, color=df_mapa["cor_ponto"], opacity=0.9),
+        text=df_mapa["device_name"],
+        textfont=dict(size=14, color="white"), 
+        textposition="top center",
+        hoverinfo="text"
+    ))
 
-fig_mapa.update_layout(
-    height=600, margin=dict(l=0, r=0, t=0, b=0),
-    mapbox=dict(
-        accesstoken=MAPBOX_TOKEN, style="satellite-streets", zoom=15,
-        center=dict(lat=df_mapa["latitude"].mean(), lon=df_mapa["longitude"].mean()),
-    ),
-    showlegend=False
-)
-
-st.plotly_chart(fig_mapa, use_container_width=True, config={'scrollZoom': True})
+    fig_mapa.update_layout(
+        height=600, margin=dict(l=0, r=0, t=0, b=0),
+        mapbox=dict(
+            accesstoken=MAPBOX_TOKEN, style="satellite-streets", zoom=15,
+            center=dict(lat=df_mapa["latitude"].mean(), lon=df_mapa["longitude"].mean()),
+        ),
+        showlegend=False
+    )
+    st.plotly_chart(fig_mapa, use_container_width=True, config={'scrollZoom': True})
 
 # ======================================================
 # TABELA E DOWNLOAD
