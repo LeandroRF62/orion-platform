@@ -140,7 +140,8 @@ with st.sidebar.expander("📍 Ramal", expanded=True):
         "RBH - José",
         "RBR - José",
         "RFA - Léo Silva",
-        "RFA - Thiago"
+        "RFA - Thiago",
+        "Humberto - S11D"
     ]
 
     ramal_selecionado = st.selectbox(
