@@ -64,9 +64,22 @@ def carregar_dados_db():
         JOIN devices d ON s.device_id = d.device_id
         ORDER BY l.data_leitura
     """
-    return pd.read_sql(query, engine)
+    df = pd.read_sql(query, engine)
+    
+    # --- CORREÇÃO DE CARACTERES E ESPAÇOS ---
+    if not df.empty and "reference" in df.columns:
+        # Substitui travessões (– ou —) por hífen simples (-) e remove espaços extras
+        df["reference"] = (
+            df["reference"]
+            .fillna("Sem Referência")
+            .str.replace("–", "-", regex=False)
+            .str.replace("—", "-", regex=False)
+            .str.strip()
+        )
+    return df
 
 df_raw = carregar_dados_db()
+
 if df_raw.empty:
     st.warning("Sem dados disponíveis.")
     st.stop()
@@ -79,12 +92,11 @@ df_raw["data_leitura"] = pd.to_datetime(df_raw["data_leitura"]).dt.tz_localize(N
 st.sidebar.button("🔄 Atualizar Dados", on_click=st.cache_data.clear)
 
 with st.sidebar.expander("📍 Ramal", expanded=True):
-    opcoes_ramais = [
-        "Humberto - S11D", "LPR - Brito", "LPR - Renan", "LPR - Witheney",
-        "RBH - José", "RBR - José", "RFA - Léo Silva", "RFA - Thiago"
-    ]
-    ramal_selecionado = st.selectbox("Selecionar Ramal", opcoes_ramais)
+    # Torna a lista dinâmica baseada no que existe no Supabase
+    opcoes_reais = sorted(df_raw["reference"].unique().tolist())
+    ramal_selecionado = st.selectbox("Selecionar Ramal", opcoes_reais)
 
+# Filtro de ramal (agora com dados normalizados)
 df_ramal = df_raw[df_raw["reference"] == ramal_selecionado]
 
 if df_ramal.empty:
@@ -115,7 +127,12 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
         outros = st.multiselect("Adicionar Outros", [d for d in dispositivos_filtrados if d != dev_principal])
         devices_selecionados = [dev_principal] + outros
 
+# Filtragem final
 df_final = df_status[(df_status["device_name"].isin(devices_selecionados)) & (df_status["tipo_sensor"].isin(tipos_selecionados))].copy()
+
+if df_final.empty:
+    st.warning("Ajuste os filtros para exibir dados.")
+    st.stop()
 
 # Período e Escala
 data_min, data_max = df_final["data_leitura"].min().date(), df_final["data_leitura"].max().date()
@@ -126,6 +143,10 @@ with st.sidebar.expander("📅 Período"):
 modo_escala = st.sidebar.radio("Escala", ["Absoluta", "Relativa (T0)"])
 df_final = df_final[(df_final["data_leitura"].dt.date >= d_ini) & (df_final["data_leitura"].dt.date <= d_fim)]
 
+if df_final.empty:
+    st.error("Nenhum dado no período selecionado.")
+    st.stop()
+
 if modo_escala == "Relativa (T0)":
     refs = df_final.sort_values("data_leitura").groupby("sensor_id")["valor_sensor"].transform("first")
     df_final["valor_grafico"] = df_final["valor_sensor"] - refs
@@ -133,7 +154,7 @@ else:
     df_final["valor_grafico"] = df_final["valor_sensor"]
 
 # ======================================================
-# GRÁFICO PRINCIPAL (COM ZOOM NO EIXO Y HABILITADO)
+# GRÁFICO PRINCIPAL
 # ======================================================
 fig = go.Figure()
 num_devs = len(devices_selecionados)
@@ -166,23 +187,18 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True, config={
     'scrollZoom': True,           
     'displayModeBar': True,       
-    'modeBarButtonsToAdd': [
-        'zoomIn2d', 
-        'zoomOut2d', 
-        'autoScale2d'
-    ],
-    'modeBarButtonsToRemove': [],
+    'modeBarButtonsToAdd': ['zoomIn2d', 'zoomOut2d', 'autoScale2d'],
     'displaylogo': False
 })
 
 # ======================================================
-# MAPA (Zoom e Letras Brancas)
+# MAPA
 # ======================================================
 st.subheader("🛰️ Localização dos Dispositivos")
-df_mapa = df_final[["device_name", "latitude", "longitude", "status"]].drop_duplicates().dropna()
-df_mapa["cor_ponto"] = df_mapa["status"].str.lower().apply(lambda x: "#00FF00" if x == "online" else "#FF0000")
+df_mapa = df_final[["device_name", "latitude", "longitude", "status"]].drop_duplicates().dropna(subset=["latitude", "longitude"])
 
 if not df_mapa.empty:
+    df_mapa["cor_ponto"] = df_mapa["status"].str.lower().apply(lambda x: "#00FF00" if x == "online" else "#FF0000")
     fig_mapa = go.Figure(go.Scattermapbox(
         lat=df_mapa["latitude"], lon=df_mapa["longitude"],
         mode="markers+text",
@@ -202,6 +218,8 @@ if not df_mapa.empty:
         showlegend=False
     )
     st.plotly_chart(fig_mapa, use_container_width=True, config={'scrollZoom': True})
+else:
+    st.info("Coordenadas geográficas não disponíveis para este ramal.")
 
 # ======================================================
 # TABELA E DOWNLOAD
