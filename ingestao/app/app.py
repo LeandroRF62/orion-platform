@@ -1,148 +1,211 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from sqlalchemy import create_engine, text
-from datetime import datetime, timedelta
+import os
+from dotenv import load_dotenv
+from pathlib import Path
 
 # ======================================================
-# 1. SETUP DE INTERFACE PROFISSIONAL
+# ENV & DATABASE
 # ======================================================
-st.set_page_config(page_title="ORION | Enterprise Geotechnical Analytics", layout="wide")
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(dotenv_path=BASE_DIR / ".env")
 
-# CSS de Alta Densidade (UI Industrial)
-st.markdown("""
-    <style>
-    .main { background-color: #f1f5f9; }
-    [data-testid="stMetricValue"] { font-size: 24px; color: #1e293b; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #e2e8f0; border-radius: 4px 4px 0 0; padding: 10px 20px;
-    }
-    .stTabs [aria-selected="true"] { background-color: #1e293b !important; color: white !important; }
-    </style>
-    """, unsafe_allow_html=True)
+DATABASE_URL = os.getenv("DATABASE_URL")
+MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
+APP_PASSWORD = os.getenv("APP_PASSWORD", "orion123")
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 
 # ======================================================
-# 2. CORE: PROCESSAMENTO E ESTATÍSTICA
+# AUTENTICAÇÃO
 # ======================================================
-class GeotechEngine:
-    @staticmethod
-    def calculate_resultants(df):
-        """Calcula o vetor resultante para sensores Tilt."""
-        df_pivot = df.pivot_table(index=['data_leitura', 'device_name'], 
-                                  columns='tipo_sensor', values='valor_sensor').reset_index()
+if "auth_ok" not in st.session_state:
+    st.session_state.auth_ok = False
+
+if not st.session_state.auth_ok:
+    st.title("🔐 Acesso restrito")
+    senha = st.text_input("Senha", type="password")
+    if st.button("Entrar"):
+        if senha == APP_PASSWORD:
+            st.session_state.auth_ok = True
+            st.rerun()
+        else:
+            st.error("Senha incorreta")
+    st.stop()
+
+st.set_page_config(page_title="Gestão Geotécnica Orion", layout="wide")
+
+# ======================================================
+# CORES E PALETAS
+# ======================================================
+CORES_SENSOR = {
+    "A-Axis Delta Angle": "#2563eb",
+    "B-Axis Delta Angle": "#059669",
+    "Device Temperature": "#f59e0b",
+    "Air Temperature": "#ef4444"
+}
+PALETA_DEVICES = ["#636EFA", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880"]
+
+# ======================================================
+# CARREGAMENTO DE DADOS
+# ======================================================
+@st.cache_data(ttl=300)
+def carregar_dados_db():
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE devices ADD COLUMN IF NOT EXISTS reference TEXT;"))
+        conn.commit()
+    query = """
+        SELECT l.data_leitura, l.valor_sensor, s.sensor_id, s.tipo_sensor, 
+               d.device_name, d.reference, d.latitude, d.longitude, d.status
+        FROM leituras l
+        JOIN sensores s ON l.sensor_id = s.sensor_id
+        JOIN devices d ON s.device_id = d.device_id
+        ORDER BY l.data_leitura
+    """
+    return pd.read_sql(query, engine)
+
+df_raw = carregar_dados_db()
+if df_raw.empty:
+    st.warning("Sem dados disponíveis.")
+    st.stop()
+
+df_raw["data_leitura"] = pd.to_datetime(df_raw["data_leitura"]).dt.tz_localize(None)
+
+# ======================================================
+# SIDEBAR - FILTROS
+# ======================================================
+st.sidebar.button("🔄 Atualizar Dados", on_click=st.cache_data.clear)
+
+with st.sidebar.expander("📍 Ramal", expanded=True):
+    opcoes_ramais = [
+        "Humberto - S11D", "LPR - Brito", "LPR - Renan", "LPR - Witheney",
+        "RBH - José", "RBR - José", "RFA - Léo Silva", "RFA - Thiago"
+    ]
+    ramal_selecionado = st.selectbox("Selecionar Ramal", opcoes_ramais)
+
+df_ramal = df_raw[df_raw["reference"] == ramal_selecionado]
+
+if df_ramal.empty:
+    st.info(f"Nenhum dado encontrado para {ramal_selecionado}.")
+    st.stop()
+
+with st.sidebar.expander("📶 Status de Conexão", expanded=True):
+    status_disponiveis = df_ramal["status"].unique().tolist()
+    status_selecionados = st.multiselect("Filtrar por Status", status_disponiveis, default=status_disponiveis)
+
+df_status = df_ramal[df_ramal["status"].isin(status_selecionados)]
+
+with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
+    tipos_disponiveis = sorted(df_status["tipo_sensor"].unique())
+    tipos_selecionados = st.multiselect("Variáveis", tipos_disponiveis, default=tipos_disponiveis)
+    
+    dispositivos_filtrados = sorted(df_status["device_name"].unique())
+    if not dispositivos_filtrados:
+        st.warning("Nenhum dispositivo com este status.")
+        st.stop()
         
-        if 'A-Axis Delta Angle' in df_pivot.columns and 'B-Axis Delta Angle' in df_pivot.columns:
-            df_pivot['Resultant_Tilt'] = np.sqrt(df_pivot['A-Axis Delta Angle']**2 + df_pivot['B-Axis Delta Angle']**2)
-            return df_pivot
-        return pd.DataFrame()
-
-# ======================================================
-# 3. SIDEBAR & NAVIGATION
-# ======================================================
-with st.sidebar:
-    st.image("https://img.icons8.com/external-flat-icons-inmotus-design/64/external-Satellite-communication-flat-icons-inmotus-design-2.png", width=60)
-    st.title("ORION PLATFORM")
-    st.caption("v2.4.0 - Enterprise Edition")
+    selecionar_todos = st.checkbox("Selecionar todos deste ramal/status")
     
-    nav = st.radio("MÓDULOS", ["🏠 Dashboard", "🛰️ Map View", "📈 Advanced Analytics", "⚙️ Management"])
-    st.divider()
+    if selecionar_todos:
+        devices_selecionados = dispositivos_filtrados
+    else:
+        dev_principal = st.selectbox("Dispositivo Principal", dispositivos_filtrados)
+        outros = st.multiselect("Adicionar Outros", [d for d in dispositivos_filtrados if d != dev_principal])
+        devices_selecionados = [dev_principal] + outros
+
+df_final = df_status[(df_status["device_name"].isin(devices_selecionados)) & (df_status["tipo_sensor"].isin(tipos_selecionados))].copy()
+
+# Período e Escala
+data_min, data_max = df_final["data_leitura"].min().date(), df_final["data_leitura"].max().date()
+with st.sidebar.expander("📅 Período"):
+    d_ini = st.date_input("Início", data_min)
+    d_fim = st.date_input("Fim", data_max)
+
+modo_escala = st.sidebar.radio("Escala", ["Absoluta", "Relativa (T0)"])
+df_final = df_final[(df_final["data_leitura"].dt.date >= d_ini) & (df_final["data_leitura"].dt.date <= d_fim)]
+
+if modo_escala == "Relativa (T0)":
+    refs = df_final.sort_values("data_leitura").groupby("sensor_id")["valor_sensor"].transform("first")
+    df_final["valor_grafico"] = df_final["valor_sensor"] - refs
+else:
+    df_final["valor_grafico"] = df_final["valor_sensor"]
+
+# ======================================================
+# GRÁFICO PRINCIPAL (COM ZOOM NO EIXO Y HABILITADO)
+# ======================================================
+fig = go.Figure()
+num_devs = len(devices_selecionados)
+dev_col_map = {dev: PALETA_DEVICES[i % len(PALETA_DEVICES)] for i, dev in enumerate(devices_selecionados)}
+
+for serie in (df_final["device_name"] + " | " + df_final["tipo_sensor"]).unique():
+    d_plot = df_final[(df_final["device_name"] + " | " + df_final["tipo_sensor"]) == serie]
+    tipo = d_plot["tipo_sensor"].iloc[0]
+    nome_dev = d_plot["device_name"].iloc[0]
     
-    # Filtro de Data Global
-    date_range = st.date_input("Janela de Análise", [datetime.now() - timedelta(days=7), datetime.now()])
-
-# SIMULAÇÃO DE CARGA (Para rodar o exemplo robusto)
-@st.cache_data
-def get_mock_data():
-    # Aqui entraria sua query SQL original. Usando mock para demonstração de robustez.
-    dates = pd.date_range(start="2024-01-01", periods=100, freq="H")
-    devices = ["Tilt-S11D-01", "Tilt-S11D-02", "Piezometro-04"]
-    data = []
-    for d in devices:
-        for t in dates:
-            data.append([t, d, "A-Axis Delta Angle", np.random.normal(0, 0.5), "Online", 85, -5.942, -50.443])
-            data.append([t, d, "B-Axis Delta Angle", np.random.normal(0, 0.5), "Online", 85, -5.942, -50.443])
-            data.append([t, d, "Device Temperature", np.random.normal(25, 2), "Online", 85, -5.942, -50.443])
-    return pd.DataFrame(data, columns=["data_leitura", "device_name", "tipo_sensor", "valor_sensor", "status", "battery", "lat", "lon"])
-
-df = get_mock_data()
-
-# ======================================================
-# 4. MÓDULO: DASHBOARD (VISÃO EXECUTIVA)
-# ======================================================
-if nav == "🏠 Dashboard":
-    st.header("Executive Overview")
+    eixo_2 = "Temperature" in tipo
+    style = dict(width=2, color=dev_col_map[nome_dev] if num_devs > 1 else CORES_SENSOR.get(tipo, "#6b7280"))
     
-    # KPIs Superiores
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Assets", df['device_name'].nunique())
-    c2.metric("Critical Alerts", "02", delta="-1", delta_color="inverse")
-    c3.metric("Avg Battery", f"{int(df['battery'].mean())}%")
-    c4.metric("Network Health", "98.2%", delta="0.4%")
+    if "Air Temperature" in tipo:
+        style["dash"] = "dash" if num_devs == 1 else "dot"
+        if num_devs == 1: style["color"] = "#ef4444"
 
-    col_left, col_right = st.columns([2, 1])
-    
-    with col_left:
-        st.subheader("Recent Activity (Resultant Tilt)")
-        res_df = GeotechEngine.calculate_resultants(df)
-        fig_res = px.line(res_df, x='data_leitura', y='Resultant_Tilt', color='device_name', 
-                         title="Vetor de Deslocamento Acumulado (mm/m)")
-        st.plotly_chart(fig_res, use_container_width=True)
+    fig.add_trace(go.Scatter(x=d_plot["data_leitura"], y=d_plot["valor_grafico"], 
+                             name=serie, line=style, yaxis="y2" if eixo_2 else "y"))
 
-    with col_right:
-        st.subheader("Device Status")
-        status_counts = df.drop_duplicates('device_name')['status'].value_counts()
-        fig_pie = px.pie(values=status_counts, names=status_counts.index, hole=0.4,
-                        color_discrete_sequence=['#10b981', '#f59e0b'])
-        st.plotly_chart(fig_pie, use_container_width=True)
+fig.update_layout(
+    height=650, 
+    hovermode="x unified",
+    yaxis=dict(title="Leitura", fixedrange=False), 
+    yaxis2=dict(title="Temp (°C)", overlaying="y", side="right", fixedrange=False),
+    xaxis=dict(title="Data/Hora", fixedrange=False),
+    legend=dict(orientation="h", y=-0.2)
+)
 
-# ======================================================
-# 5. MÓDULO: ANALYTICS (O CORAÇÃO DO SOFTWARE)
-# ======================================================
-elif nav == "📈 Advanced Analytics":
-    tab1, tab2, tab3 = st.tabs(["📊 Time Series", "🌡️ Correlation Analysis", "📉 Statistics"])
-    
-    with tab1:
-        st.subheader("Multi-Axis Comparison")
-        selected_dev = st.selectbox("Select Device", df['device_name'].unique())
-        df_dev = df[df['device_name'] == selected_dev]
-        
-        fig_multi = go.Figure()
-        for sensor in df_dev['tipo_sensor'].unique():
-            sub = df_dev[df_dev['tipo_sensor'] == sensor]
-            fig_multi.add_trace(go.Scatter(x=sub['data_leitura'], y=sub['valor_sensor'], name=sensor))
-        
-        fig_multi.update_layout(height=600, hovermode="x unified")
-        st.plotly_chart(fig_multi, use_container_width=True)
-
-    with tab2:
-        st.subheader("Thermal Influence Analysis")
-        # Gráfico de dispersão para ver se a temperatura está "movendo" o sensor (ruído térmico)
-        df_corr = df_dev.pivot(index='data_leitura', columns='tipo_sensor', values='valor_sensor')
-        if 'Device Temperature' in df_corr.columns and 'A-Axis Delta Angle' in df_corr.columns:
-            fig_scat = px.scatter(df_corr, x='Device Temperature', y='A-Axis Delta Angle', 
-                                 trendline="ols", title="Temperature vs displacement Correlation")
-            st.plotly_chart(fig_scat, use_container_width=True)
-
-    with tab3:
-        st.subheader("Statistical Summary")
-        stats = df_dev.groupby('tipo_sensor')['valor_sensor'].agg(['mean', 'std', 'min', 'max']).reset_index()
-        st.table(stats)
+st.plotly_chart(fig, use_container_width=True, config={
+    'scrollZoom': True,           
+    'displayModeBar': True,       
+    'modeBarButtonsToAdd': [
+        'zoomIn2d', 
+        'zoomOut2d', 
+        'autoScale2d'
+    ],
+    'modeBarButtonsToRemove': [],
+    'displaylogo': False
+})
 
 # ======================================================
-# 6. MÓDULO: MANAGEMENT (CRUD)
+# MAPA (Zoom e Letras Brancas)
 # ======================================================
-elif nav == "⚙️ Management":
-    st.header("Asset Inventory Management")
-    
-    # Grid Editável estilo Orion
-    edited_df = st.data_editor(
-        df.drop_duplicates('device_name')[['device_name', 'status', 'battery', 'lat', 'lon']],
-        num_rows="dynamic",
-        use_container_width=True
+st.subheader("🛰️ Localização dos Dispositivos")
+df_mapa = df_final[["device_name", "latitude", "longitude", "status"]].drop_duplicates().dropna()
+df_mapa["cor_ponto"] = df_mapa["status"].str.lower().apply(lambda x: "#00FF00" if x == "online" else "#FF0000")
+
+if not df_mapa.empty:
+    fig_mapa = go.Figure(go.Scattermapbox(
+        lat=df_mapa["latitude"], lon=df_mapa["longitude"],
+        mode="markers+text",
+        marker=dict(size=12, color=df_mapa["cor_ponto"], opacity=0.9),
+        text=df_mapa["device_name"],
+        textfont=dict(size=14, color="white"), 
+        textposition="top center",
+        hoverinfo="text"
+    ))
+
+    fig_mapa.update_layout(
+        height=600, margin=dict(l=0, r=0, t=0, b=0),
+        mapbox=dict(
+            accesstoken=MAPBOX_TOKEN, style="satellite-streets", zoom=15,
+            center=dict(lat=df_mapa["latitude"].mean(), lon=df_mapa["longitude"].mean()),
+        ),
+        showlegend=False
     )
-    
-    if st.button("Save Changes to Database"):
-        st.success("Database synchronized successfully!")
+    st.plotly_chart(fig_mapa, use_container_width=True, config={'scrollZoom': True})
+
+# ======================================================
+# TABELA E DOWNLOAD
+# ======================================================
+with st.expander("📋 Ver Tabela de Dados"):
+    st.dataframe(df_final[["data_leitura", "device_name", "tipo_sensor", "valor_sensor"]], use_container_width=True)
+    st.download_button("📥 CSV", df_final.to_csv(index=False).encode("utf-8"), "dados.csv", "text/csv")
