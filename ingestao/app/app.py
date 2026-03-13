@@ -66,9 +66,9 @@ def carregar_dados_db():
     """
     df = pd.read_sql(query, engine)
     
-    # --- CORREÇÃO DE CARACTERES E ESPAÇOS ---
+    # --- NORMALIZAÇÃO DA COLUNA REFERENCE ---
     if not df.empty and "reference" in df.columns:
-        # Substitui travessões (– ou —) por hífen simples (-) e remove espaços extras
+        # Substitui travessões longos por hífen simples e remove espaços extras
         df["reference"] = (
             df["reference"]
             .fillna("Sem Referência")
@@ -81,7 +81,7 @@ def carregar_dados_db():
 df_raw = carregar_dados_db()
 
 if df_raw.empty:
-    st.warning("Sem dados disponíveis.")
+    st.warning("Sem dados disponíveis no banco de dados.")
     st.stop()
 
 df_raw["data_leitura"] = pd.to_datetime(df_raw["data_leitura"]).dt.tz_localize(None)
@@ -91,12 +91,33 @@ df_raw["data_leitura"] = pd.to_datetime(df_raw["data_leitura"]).dt.tz_localize(N
 # ======================================================
 st.sidebar.button("🔄 Atualizar Dados", on_click=st.cache_data.clear)
 
-with st.sidebar.expander("📍 Ramal", expanded=True):
-    # Torna a lista dinâmica baseada no que existe no Supabase
-    opcoes_reais = sorted(df_raw["reference"].unique().tolist())
-    ramal_selecionado = st.selectbox("Selecionar Ramal", opcoes_reais)
+# Lista oficial de ramais permitidos
+RAMAIS_PERMITIDOS = [
+    "Humberto - S11D", 
+    "LPR - Brito", 
+    "LPR - Renan", 
+    "LPR - Witheney",
+    "RBH - José", 
+    "RBR - José", 
+    "RFA - Léo Silva", 
+    "RFA - Thiago"
+]
 
-# Filtro de ramal (agora com dados normalizados)
+with st.sidebar.expander("📍 Ramal", expanded=True):
+    # Obtém o que realmente existe no banco após a normalização
+    opcoes_no_banco = df_raw["reference"].unique().tolist()
+    
+    # Filtra para mostrar apenas o que está na lista de permitidos E existe no banco
+    opcoes_finais = sorted([r for r in RAMAIS_PERMITIDOS if r in opcoes_no_banco])
+    
+    if not opcoes_finais:
+        st.error("Nenhum dos ramais configurados foi encontrado no banco.")
+        st.info(f"Valores brutos no banco: {opcoes_no_banco}")
+        st.stop()
+        
+    ramal_selecionado = st.selectbox("Selecionar Ramal", opcoes_finais)
+
+# Aplicação do filtro de Ramal
 df_ramal = df_raw[df_raw["reference"] == ramal_selecionado]
 
 if df_ramal.empty:
@@ -127,11 +148,11 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
         outros = st.multiselect("Adicionar Outros", [d for d in dispositivos_filtrados if d != dev_principal])
         devices_selecionados = [dev_principal] + outros
 
-# Filtragem final
+# Filtragem final para o gráfico
 df_final = df_status[(df_status["device_name"].isin(devices_selecionados)) & (df_status["tipo_sensor"].isin(tipos_selecionados))].copy()
 
 if df_final.empty:
-    st.warning("Ajuste os filtros para exibir dados.")
+    st.warning("Selecione ao menos uma variável e um dispositivo.")
     st.stop()
 
 # Período e Escala
@@ -144,7 +165,7 @@ modo_escala = st.sidebar.radio("Escala", ["Absoluta", "Relativa (T0)"])
 df_final = df_final[(df_final["data_leitura"].dt.date >= d_ini) & (df_final["data_leitura"].dt.date <= d_fim)]
 
 if df_final.empty:
-    st.error("Nenhum dado no período selecionado.")
+    st.error("Não há dados para o intervalo de datas selecionado.")
     st.stop()
 
 if modo_escala == "Relativa (T0)":
@@ -219,7 +240,7 @@ if not df_mapa.empty:
     )
     st.plotly_chart(fig_mapa, use_container_width=True, config={'scrollZoom': True})
 else:
-    st.info("Coordenadas geográficas não disponíveis para este ramal.")
+    st.info("Coordenadas geográficas não disponíveis para os dispositivos selecionados.")
 
 # ======================================================
 # TABELA E DOWNLOAD
