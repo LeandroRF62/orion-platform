@@ -66,9 +66,7 @@ def carregar_dados_db():
     """
     df = pd.read_sql(query, engine)
     
-    # --- NORMALIZAÇÃO DA COLUNA REFERENCE ---
     if not df.empty and "reference" in df.columns:
-        # Substitui travessões longos por hífen simples e remove espaços extras
         df["reference"] = (
             df["reference"]
             .fillna("Sem Referência")
@@ -91,7 +89,6 @@ df_raw["data_leitura"] = pd.to_datetime(df_raw["data_leitura"]).dt.tz_localize(N
 # ======================================================
 st.sidebar.button("🔄 Atualizar Dados", on_click=st.cache_data.clear)
 
-# Lista oficial de ramais permitidos
 RAMAIS_PERMITIDOS = [
     "Humberto - S11D", 
     "LPR - Brito", 
@@ -104,20 +101,15 @@ RAMAIS_PERMITIDOS = [
 ]
 
 with st.sidebar.expander("📍 Ramal", expanded=True):
-    # Obtém o que realmente existe no banco após a normalização
     opcoes_no_banco = df_raw["reference"].unique().tolist()
-    
-    # Filtra para mostrar apenas o que está na lista de permitidos E existe no banco
     opcoes_finais = sorted([r for r in RAMAIS_PERMITIDOS if r in opcoes_no_banco])
     
     if not opcoes_finais:
         st.error("Nenhum dos ramais configurados foi encontrado no banco.")
-        st.info(f"Valores brutos no banco: {opcoes_no_banco}")
         st.stop()
         
     ramal_selecionado = st.selectbox("Selecionar Ramal", opcoes_finais)
 
-# Aplicação do filtro de Ramal
 df_ramal = df_raw[df_raw["reference"] == ramal_selecionado]
 
 if df_ramal.empty:
@@ -132,7 +124,7 @@ df_status = df_ramal[df_ramal["status"].isin(status_selecionados)]
 
 with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
     tipos_disponiveis = sorted(df_status["tipo_sensor"].unique())
-    tipos_selecionados = st.multiselect("Variáveis", tipos_disponiveis, default=tipos_disponiveis)
+    tipos_selecionados = st.multiselect("Variáveis", tipos_disponiveis, default=[t for t in tipos_disponiveis if "Battery" not in t])
     
     dispositivos_filtrados = sorted(df_status["device_name"].unique())
     if not dispositivos_filtrados:
@@ -148,14 +140,12 @@ with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
         outros = st.multiselect("Adicionar Outros", [d for d in dispositivos_filtrados if d != dev_principal])
         devices_selecionados = [dev_principal] + outros
 
-# Filtragem final para o gráfico
 df_final = df_status[(df_status["device_name"].isin(devices_selecionados)) & (df_status["tipo_sensor"].isin(tipos_selecionados))].copy()
 
 if df_final.empty:
     st.warning("Selecione ao menos uma variável e um dispositivo.")
     st.stop()
 
-# Período e Escala
 data_min, data_max = df_final["data_leitura"].min().date(), df_final["data_leitura"].max().date()
 with st.sidebar.expander("📅 Período"):
     d_ini = st.date_input("Início", data_min)
@@ -205,26 +195,37 @@ fig.update_layout(
     legend=dict(orientation="h", y=-0.2)
 )
 
-st.plotly_chart(fig, use_container_width=True, config={
-    'scrollZoom': True,           
-    'displayModeBar': True,       
-    'modeBarButtonsToAdd': ['zoomIn2d', 'zoomOut2d', 'autoScale2d'],
-    'displaylogo': False
-})
+st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
 
 # ======================================================
-# MAPA
+# MAPA (ATUALIZADO COM BATERIA)
 # ======================================================
 st.subheader("🛰️ Localização dos Dispositivos")
-df_mapa = df_final[["device_name", "latitude", "longitude", "status"]].drop_duplicates().dropna(subset=["latitude", "longitude"])
+
+# Criamos uma cópia dos dados filtrados pelo ramal/status para buscar a bateria
+# Mesmo que o usuário não selecione o gráfico de bateria, o mapa tentará mostrar
+df_bateria = df_status[df_status["tipo_sensor"].str.contains("Battery", case=False, na=False)].copy()
+
+def get_battery_info(row):
+    # Busca a última leitura de bateria para este device_name
+    bat_val = df_bateria[df_bateria["device_name"] == row["device_name"]].sort_values("data_leitura", ascending=False)
+    if not bat_val.empty:
+        val = bat_val.iloc[0]["valor_sensor"]
+        return f"{row['device_name']} ({val}V)"
+    return row["device_name"]
+
+df_mapa = df_status[["device_name", "latitude", "longitude", "status"]].drop_duplicates().dropna(subset=["latitude", "longitude"])
 
 if not df_mapa.empty:
+    # Aplicar a função para adicionar o valor da bateria ao nome
+    df_mapa["label_mapa"] = df_mapa.apply(get_battery_info, axis=1)
     df_mapa["cor_ponto"] = df_mapa["status"].str.lower().apply(lambda x: "#00FF00" if x == "online" else "#FF0000")
+    
     fig_mapa = go.Figure(go.Scattermapbox(
         lat=df_mapa["latitude"], lon=df_mapa["longitude"],
         mode="markers+text",
         marker=dict(size=12, color=df_mapa["cor_ponto"], opacity=0.9),
-        text=df_mapa["device_name"],
+        text=df_mapa["label_mapa"], # Usando o novo label com bateria
         textfont=dict(size=14, color="white"), 
         textposition="top center",
         hoverinfo="text"
@@ -240,7 +241,7 @@ if not df_mapa.empty:
     )
     st.plotly_chart(fig_mapa, use_container_width=True, config={'scrollZoom': True})
 else:
-    st.info("Coordenadas geográficas não disponíveis para os dispositivos selecionados.")
+    st.info("Coordenadas geográficas não disponíveis.")
 
 # ======================================================
 # TABELA E DOWNLOAD
