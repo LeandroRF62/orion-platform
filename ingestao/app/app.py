@@ -55,10 +55,14 @@ PALETA_DEVICES = ["#636EFA", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3", "#FF669
 def carregar_dados_db():
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE devices ADD COLUMN IF NOT EXISTS reference TEXT;"))
+        conn.execute(text("ALTER TABLE devices ADD COLUMN IF NOT EXISTS battery_percentage FLOAT;"))
         conn.commit()
+    
+    # Query atualizada para trazer battery_percentage da tabela devices (d)
     query = """
         SELECT l.data_leitura, l.valor_sensor, s.sensor_id, s.tipo_sensor, 
-               d.device_name, d.reference, d.latitude, d.longitude, d.status
+               d.device_name, d.reference, d.latitude, d.longitude, d.status,
+               d.battery_percentage
         FROM leituras l
         JOIN sensores s ON l.sensor_id = s.sensor_id
         JOIN devices d ON s.device_id = d.device_id
@@ -124,7 +128,7 @@ df_status = df_ramal[df_ramal["status"].isin(status_selecionados)]
 
 with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
     tipos_disponiveis = sorted(df_status["tipo_sensor"].unique())
-    tipos_selecionados = st.multiselect("Variáveis", tipos_disponiveis, default=[t for t in tipos_disponiveis if "Battery" not in t])
+    tipos_selecionados = st.multiselect("Variáveis", tipos_disponiveis, default=tipos_disponiveis)
     
     dispositivos_filtrados = sorted(df_status["device_name"].unique())
     if not dispositivos_filtrados:
@@ -195,37 +199,37 @@ fig.update_layout(
     legend=dict(orientation="h", y=-0.2)
 )
 
-st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False})
+st.plotly_chart(fig, use_container_width=True, config={
+    'scrollZoom': True,           
+    'displayModeBar': True,       
+    'modeBarButtonsToAdd': ['zoomIn2d', 'zoomOut2d', 'autoScale2d'],
+    'displaylogo': False
+})
 
 # ======================================================
-# MAPA (ATUALIZADO COM BATERIA)
+# MAPA
 # ======================================================
 st.subheader("🛰️ Localização dos Dispositivos")
-
-# Criamos uma cópia dos dados filtrados pelo ramal/status para buscar a bateria
-# Mesmo que o usuário não selecione o gráfico de bateria, o mapa tentará mostrar
-df_bateria = df_status[df_status["tipo_sensor"].str.contains("Battery", case=False, na=False)].copy()
-
-def get_battery_info(row):
-    # Busca a última leitura de bateria para este device_name
-    bat_val = df_bateria[df_bateria["device_name"] == row["device_name"]].sort_values("data_leitura", ascending=False)
-    if not bat_val.empty:
-        val = bat_val.iloc[0]["valor_sensor"]
-        return f"{row['device_name']} ({val}V)"
-    return row["device_name"]
-
-df_mapa = df_status[["device_name", "latitude", "longitude", "status"]].drop_duplicates().dropna(subset=["latitude", "longitude"])
+# Pega dados únicos de localização e bateria
+df_mapa = df_status[["device_name", "latitude", "longitude", "status", "battery_percentage"]].drop_duplicates().dropna(subset=["latitude", "longitude"])
 
 if not df_mapa.empty:
-    # Aplicar a função para adicionar o valor da bateria ao nome
-    df_mapa["label_mapa"] = df_mapa.apply(get_battery_info, axis=1)
+    # Função para criar o nome com a bateria
+    def formatar_label_mapa(row):
+        nome = str(row["device_name"])
+        bat = row["battery_percentage"]
+        if pd.notnull(bat):
+            return f"{nome} ({int(bat)}%)"
+        return nome
+
+    df_mapa["label_exibicao"] = df_mapa.apply(formatar_label_mapa, axis=1)
     df_mapa["cor_ponto"] = df_mapa["status"].str.lower().apply(lambda x: "#00FF00" if x == "online" else "#FF0000")
     
     fig_mapa = go.Figure(go.Scattermapbox(
         lat=df_mapa["latitude"], lon=df_mapa["longitude"],
         mode="markers+text",
         marker=dict(size=12, color=df_mapa["cor_ponto"], opacity=0.9),
-        text=df_mapa["label_mapa"], # Usando o novo label com bateria
+        text=df_mapa["label_exibicao"], # Usando a coluna formatada com bateria
         textfont=dict(size=14, color="white"), 
         textposition="top center",
         hoverinfo="text"
@@ -241,7 +245,7 @@ if not df_mapa.empty:
     )
     st.plotly_chart(fig_mapa, use_container_width=True, config={'scrollZoom': True})
 else:
-    st.info("Coordenadas geográficas não disponíveis.")
+    st.info("Coordenadas geográficas não disponíveis para os dispositivos selecionados.")
 
 # ======================================================
 # TABELA E DOWNLOAD
