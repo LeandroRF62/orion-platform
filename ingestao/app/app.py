@@ -207,18 +207,18 @@ st.plotly_chart(fig, use_container_width=True, config={
 })
 
 # ======================================================
-# MAPA (AJUSTE FINO DE POSICIONAMENTO)
+# MAPA (TEXTO EM UMA LINHA E POSICIONADO AO LADO/CIMA)
 # ======================================================
 st.subheader("🛰️ Localização dos Dispositivos")
 df_mapa = df_status[["device_name", "latitude", "longitude", "status", "battery_percentage"]].drop_duplicates().dropna(subset=["latitude", "longitude"])
 
 if not df_mapa.empty:
+    # Função para criar o nome com a bateria em uma única linha
     def formatar_label_mapa(row):
         nome = str(row["device_name"])
         bat = row["battery_percentage"]
-        # Adicionamos <br> para garantir que o texto tenha espaço e não atropele a bolinha
         if pd.notnull(bat):
-            return f"{nome}<br>({int(bat)}%)"
+            return f"{nome} ({int(bat)}%)" # Tudo na mesma linha
         return nome
 
     df_mapa["label_exibicao"] = df_mapa.apply(formatar_label_mapa, axis=1)
@@ -231,15 +231,15 @@ if not df_mapa.empty:
         marker=dict(
             size=12, 
             color=df_mapa["cor_ponto"], 
-            opacity=1.0 # Opacidade total para destacar bem o status
+            opacity=1.0 
         ),
         text=df_mapa["label_exibicao"],
         textfont=dict(
             size=13, 
             color="white"
         ), 
-        # "top right" ou "top center" costumam funcionar melhor com textos multi-linha
-        textposition="top center", 
+        # 'top right' evita que o início do texto bata no centro da bolinha
+        textposition="top right", 
         hoverinfo="text"
     ))
 
