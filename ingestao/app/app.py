@@ -207,7 +207,7 @@ st.plotly_chart(fig, use_container_width=True, config={
 })
 
 # ======================================================
-# MAPA
+# MAPA (ATUALIZADO COM TEXTO ACIMA E BRANCO)
 # ======================================================
 st.subheader("🛰️ Localização dos Dispositivos")
 # Pega dados únicos de localização e bateria
@@ -226,19 +226,29 @@ if not df_mapa.empty:
     df_mapa["cor_ponto"] = df_mapa["status"].str.lower().apply(lambda x: "#00FF00" if x == "online" else "#FF0000")
     
     fig_mapa = go.Figure(go.Scattermapbox(
-        lat=df_mapa["latitude"], lon=df_mapa["longitude"],
+        lat=df_mapa["latitude"], 
+        lon=df_mapa["longitude"],
         mode="markers+text",
-        marker=dict(size=12, color=df_mapa["cor_ponto"], opacity=0.9),
-        text=df_mapa["label_exibicao"], # Usando a coluna formatada com bateria
-        textfont=dict(size=14, color="white"), 
-        textposition="top center",
+        marker=dict(
+            size=14, # Aumentei levemente o tamanho do ponto
+            color=df_mapa["cor_ponto"], 
+            opacity=0.9
+        ),
+        text=df_mapa["label_exibicao"], # Nome formatado com bateria
+        textfont=dict(
+            size=15, # Tamanho da fonte levemente maior
+            color="white" # Garante a cor branca do texto
+        ), 
+        textposition="top center", # <<< ESTA LINHA MOVE O TEXTO PARA CIMA
         hoverinfo="text"
     ))
 
     fig_mapa.update_layout(
         height=600, margin=dict(l=0, r=0, t=0, b=0),
         mapbox=dict(
-            accesstoken=MAPBOX_TOKEN, style="satellite-streets", zoom=15,
+            accesstoken=MAPBOX_TOKEN, 
+            style="satellite-streets", 
+            zoom=15,
             center=dict(lat=df_mapa["latitude"].mean(), lon=df_mapa["longitude"].mean()),
         ),
         showlegend=False
