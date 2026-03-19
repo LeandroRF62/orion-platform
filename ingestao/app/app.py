@@ -207,19 +207,18 @@ st.plotly_chart(fig, use_container_width=True, config={
 })
 
 # ======================================================
-# MAPA (ATUALIZADO COM TEXTO ACIMA E BRANCO)
+# MAPA (AJUSTE FINO DE POSICIONAMENTO)
 # ======================================================
 st.subheader("🛰️ Localização dos Dispositivos")
-# Pega dados únicos de localização e bateria
 df_mapa = df_status[["device_name", "latitude", "longitude", "status", "battery_percentage"]].drop_duplicates().dropna(subset=["latitude", "longitude"])
 
 if not df_mapa.empty:
-    # Função para criar o nome com a bateria
     def formatar_label_mapa(row):
         nome = str(row["device_name"])
         bat = row["battery_percentage"]
+        # Adicionamos <br> para garantir que o texto tenha espaço e não atropele a bolinha
         if pd.notnull(bat):
-            return f"{nome} ({int(bat)}%)"
+            return f"{nome}<br>({int(bat)}%)"
         return nome
 
     df_mapa["label_exibicao"] = df_mapa.apply(formatar_label_mapa, axis=1)
@@ -230,16 +229,17 @@ if not df_mapa.empty:
         lon=df_mapa["longitude"],
         mode="markers+text",
         marker=dict(
-            size=14, # Aumentei levemente o tamanho do ponto
+            size=12, 
             color=df_mapa["cor_ponto"], 
-            opacity=0.9
+            opacity=1.0 # Opacidade total para destacar bem o status
         ),
-        text=df_mapa["label_exibicao"], # Nome formatado com bateria
+        text=df_mapa["label_exibicao"],
         textfont=dict(
-            size=15, # Tamanho da fonte levemente maior
-            color="white" # Garante a cor branca do texto
+            size=13, 
+            color="white"
         ), 
-        textposition="top center", # <<< ESTA LINHA MOVE O TEXTO PARA CIMA
+        # "top right" ou "top center" costumam funcionar melhor com textos multi-linha
+        textposition="top center", 
         hoverinfo="text"
     ))
 
@@ -255,7 +255,7 @@ if not df_mapa.empty:
     )
     st.plotly_chart(fig_mapa, use_container_width=True, config={'scrollZoom': True})
 else:
-    st.info("Coordenadas geográficas não disponíveis para os dispositivos selecionados.")
+    st.info("Coordenadas geográficas não disponíveis.")
 
 # ======================================================
 # TABELA E DOWNLOAD
