@@ -19,7 +19,7 @@ APP_PASSWORD = os.getenv("APP_PASSWORD", "orion123")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 
 # ======================================================
-# FUNÇÕES DE BANCO DE DADOS (EXISTENTES + NOVA)
+# FUNÇÕES DE BANCO DE DADOS
 # ======================================================
 @st.cache_data(ttl=300)
 def carregar_dados_db():
@@ -50,10 +50,8 @@ def carregar_dados_db():
     return df
 
 def apagar_leitura_db(data_hora, device_name, tipo_sensor):
-    """Nova função para remover dado específico do banco"""
     try:
         with engine.connect() as conn:
-            # Busca o sensor_id correto para garantir precisão no delete
             query_find = text("""
                 SELECT s.sensor_id 
                 FROM sensores s 
@@ -106,89 +104,46 @@ CORES_SENSOR = {
 PALETA_DEVICES = ["#636EFA", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880"]
 
 # ======================================================
-# PROCESSAMENTO DE DADOS
+# PROCESSAMENTO DE FILTROS
 # ======================================================
 df_raw = carregar_dados_db()
-
 if df_raw.empty:
-    st.warning("Sem dados disponíveis no banco de dados.")
+    st.warning("Sem dados disponíveis.")
     st.stop()
 
 df_raw["data_leitura"] = pd.to_datetime(df_raw["data_leitura"]).dt.tz_localize(None)
 
-# ======================================================
-# SIDEBAR - FILTROS
-# ======================================================
 st.sidebar.button("🔄 Atualizar Dados", on_click=st.cache_data.clear)
 
-RAMAIS_PERMITIDOS = [
-    "Humberto - S11D", 
-    "LPR - Brito", 
-    "LPR - Renan", 
-    "LPR - Witheney",
-    "RBH - José", 
-    "RBR - José", 
-    "RFA - Léo Silva", 
-    "RFA - Thiago"
-]
+RAMAIS_PERMITIDOS = ["Humberto - S11D", "LPR - Brito", "LPR - Renan", "LPR - Witheney", "RBH - José", "RBR - José", "RFA - Léo Silva", "RFA - Thiago"]
 
 with st.sidebar.expander("📍 Ramal", expanded=True):
     opcoes_no_banco = df_raw["reference"].unique().tolist()
     opcoes_finais = sorted([r for r in RAMAIS_PERMITIDOS if r in opcoes_no_banco])
-    
-    if not opcoes_finais:
-        st.error("Nenhum dos ramais configurados foi encontrado no banco.")
-        st.stop()
-        
+    if not opcoes_finais: st.stop()
     ramal_selecionado = st.selectbox("Selecionar Ramal", opcoes_finais)
 
 df_ramal = df_raw[df_raw["reference"] == ramal_selecionado]
 
-if df_ramal.empty:
-    st.info(f"Nenhum dado encontrado para {ramal_selecionado}.")
-    st.stop()
-
-with st.sidebar.expander("📶 Status de Conexão", expanded=True):
-    status_disponiveis = df_ramal["status"].unique().tolist()
-    status_selecionados = st.multiselect("Filtrar por Status", status_disponiveis, default=status_disponiveis)
+with st.sidebar.expander("📶 Status", expanded=True):
+    status_selecionados = st.multiselect("Status", df_ramal["status"].unique(), default=df_ramal["status"].unique())
 
 df_status = df_ramal[df_ramal["status"].isin(status_selecionados)]
 
 with st.sidebar.expander("🎛️ Dispositivo", expanded=True):
-    tipos_disponiveis = sorted(df_status["tipo_sensor"].unique())
-    tipos_selecionados = st.multiselect("Variáveis", tipos_disponiveis, default=tipos_disponiveis)
-    
+    tipos_selecionados = st.multiselect("Variáveis", sorted(df_status["tipo_sensor"].unique()), default=sorted(df_status["tipo_sensor"].unique()))
     dispositivos_filtrados = sorted(df_status["device_name"].unique())
-    if not dispositivos_filtrados:
-        st.warning("Nenhum dispositivo com este status.")
-        st.stop()
-        
-    selecionar_todos = st.checkbox("Selecionar todos deste ramal/status")
-    
-    if selecionar_todos:
-        devices_selecionados = dispositivos_filtrados
-    else:
-        dev_principal = st.selectbox("Dispositivo Principal", dispositivos_filtrados)
-        outros = st.multiselect("Adicionar Outros", [d for d in dispositivos_filtrados if d != dev_principal])
-        devices_selecionados = [dev_principal] + outros
+    selecionar_todos = st.checkbox("Todos deste ramal")
+    devices_selecionados = dispositivos_filtrados if selecionar_todos else [st.selectbox("Principal", dispositivos_filtrados)] + st.multiselect("Outros", [d for d in dispositivos_filtrados])
 
 df_final = df_status[(df_status["device_name"].isin(devices_selecionados)) & (df_status["tipo_sensor"].isin(tipos_selecionados))].copy()
 
-if df_final.empty:
-    st.warning("Selecione ao menos uma variável e um dispositivo.")
-    st.stop()
-
-data_min, data_max = df_final["data_leitura"].min().date(), df_final["data_leitura"].max().date()
 with st.sidebar.expander("📅 Período"):
-    d_ini = st.date_input("Início", data_min)
-    d_fim = st.date_input("Fim", data_max)
+    d_ini = st.date_input("Início", df_final["data_leitura"].min().date())
+    d_fim = st.date_input("Fim", df_final["data_leitura"].max().date())
 
 modo_escala = st.sidebar.radio("Escala", ["Absoluta", "Relativa (T0)"])
 df_final = df_final[(df_final["data_leitura"].dt.date >= d_ini) & (df_final["data_leitura"].dt.date <= d_fim)]
-
-if df_final.empty:
-    st.error("Não há dados para o intervalo de datas selecionado.")
-    st.stop()
 
 if modo_escala == "Relativa (T0)":
     refs = df_final.sort_values("data_leitura").groupby("sensor_id")["valor_sensor"].transform("first")
@@ -197,116 +152,78 @@ else:
     df_final["valor_grafico"] = df_final["valor_sensor"]
 
 # ======================================================
-# GRÁFICO PRINCIPAL COM INTERAÇÃO DE EXCLUSÃO
+# GRÁFICO PRINCIPAL
 # ======================================================
 st.subheader("📈 Gráfico de Monitoramento")
-st.info("💡 Para apagar um dado: clique em um ponto do gráfico e confirme a exclusão abaixo.")
+st.info("💡 Clique em um ponto para excluir.")
 
 fig = go.Figure()
 num_devs = len(devices_selecionados)
 dev_col_map = {dev: PALETA_DEVICES[i % len(PALETA_DEVICES)] for i, dev in enumerate(devices_selecionados)}
 
-for serie in (df_final["device_name"] + " | " + df_final["tipo_sensor"]).unique():
+series_list = (df_final["device_name"] + " | " + df_final["tipo_sensor"]).unique()
+
+for serie in series_list:
     d_plot = df_final[(df_final["device_name"] + " | " + df_final["tipo_sensor"]) == serie]
     tipo = d_plot["tipo_sensor"].iloc[0]
     nome_dev = d_plot["device_name"].iloc[0]
     
     eixo_2 = "Temperature" in tipo
-    style = dict(width=2, color=dev_col_map[nome_dev] if num_devs > 1 else CORES_SENSOR.get(tipo, "#6b7280"))
+    color = dev_col_map[nome_dev] if num_devs > 1 else CORES_SENSOR.get(tipo, "#6b7280")
     
-    if "Air Temperature" in tipo:
-        style["dash"] = "dash" if num_devs == 1 else "dot"
-        if num_devs == 1: style["color"] = "#ef4444"
-
     fig.add_trace(go.Scatter(
         x=d_plot["data_leitura"], 
         y=d_plot["valor_grafico"], 
         name=serie, 
-        line=style, 
-        yaxis="y2" if eixo_2 else "y",
+        line=dict(width=2, color=color, dash="dot" if "Air" in tipo else None),
         mode='lines+markers',
-        customdata=d_plot[['device_name', 'tipo_sensor']],
+        # Armazenamos os nomes reais nos metadados para recuperação segura
+        customdata=[[nome_dev, tipo]] * len(d_plot),
         hovertemplate="<b>%{x}</b><br>Valor: %{y}<extra></extra>"
     ))
 
-fig.update_layout(
-    height=650, 
-    hovermode="closest", 
-    clickmode='event+select',
-    yaxis=dict(title="Leitura", fixedrange=False), 
-    yaxis2=dict(title="Temp (°C)", overlaying="y", side="right", fixedrange=False),
-    xaxis=dict(title="Data/Hora", fixedrange=False),
-    legend=dict(orientation="h", y=-0.2)
-)
+fig.update_layout(height=650, hovermode="closest", clickmode='event+select', legend=dict(orientation="h", y=-0.2))
 
-# Renderiza o gráfico e captura a seleção
-selecao = st.plotly_chart(fig, use_container_width=True, on_select="rerun", config={
-    'scrollZoom': True,           
-    'displayModeBar': True,       
-    'displaylogo': False
-})
+selecao = st.plotly_chart(fig, use_container_width=True, on_select="rerun")
 
-# Lógica de Exclusão (Aparece apenas se um ponto for clicado)
+# LÓGICA DE EXCLUSÃO CORRIGIDA
 if selecao and "selection" in selecao and len(selecao["selection"]["points"]) > 0:
     ponto = selecao["selection"]["points"][0]
-    dt_clicada = ponto["x"]
-    label_serie = ponto["fullData"]["name"].split(" | ")
-    dev_clicado = label_serie[0]
-    tipo_clicado = label_serie[1]
     
-    st.warning(f"⚠️ Confirmar exclusão definitiva do ponto: **{dt_clicada}** do sensor **{dev_clicado} ({tipo_clicado})**?")
+    # Recuperação segura dos dados via customdata
+    # O customdata foi definido como [nome_dev, tipo] no loop do Scatter
+    dt_clicada = ponto["x"]
+    idx_curva = ponto["curve_number"]
+    
+    # Buscamos a informação diretamente do objeto da curva clicada
+    info_serie = fig.data[idx_curva].customdata[0]
+    dev_clicado = info_serie[0]
+    tipo_clicado = info_serie[1]
+    
+    st.warning(f"🗑️ Excluir ponto de **{dt_clicada}** do sensor **{dev_clicado}**?")
     c1, c2 = st.columns(2)
-    if c1.button("🗑️ Sim, apagar do banco"):
+    if c1.button("Confirmar Exclusão"):
         if apagar_leitura_db(dt_clicada, dev_clicado, tipo_clicado):
-            st.success("Dado removido!")
-            st.cache_data.clear() # Limpa cache para refletir a mudança
+            st.cache_data.clear()
             st.rerun()
     if c2.button("Cancelar"):
         st.rerun()
 
 # ======================================================
-# MAPA
+# MAPA E TABELAS (MANTIDOS)
 # ======================================================
-st.subheader("🛰️ Localização dos Dispositivos")
+st.subheader("🛰️ Localização")
 df_mapa = df_status[["device_name", "latitude", "longitude", "status", "battery_percentage"]].drop_duplicates().dropna(subset=["latitude", "longitude"])
-
 if not df_mapa.empty:
-    def formatar_label_mapa(row):
-        nome = str(row["device_name"])
-        bat = row["battery_percentage"]
-        return f"{nome} ({int(bat)}%)" if pd.notnull(bat) else nome
-
-    df_mapa["label_exibicao"] = df_mapa.apply(formatar_label_mapa, axis=1)
-    df_mapa["cor_ponto"] = df_mapa["status"].str.lower().apply(lambda x: "#00FF00" if x == "online" else "#FF0000")
-    
+    df_mapa["label"] = df_mapa.apply(lambda r: f"{r['device_name']} ({int(r['battery_percentage'])}%)" if pd.notnull(r['battery_percentage']) else r['device_name'], axis=1)
     fig_mapa = go.Figure(go.Scattermapbox(
-        lat=df_mapa["latitude"], 
-        lon=df_mapa["longitude"],
-        mode="markers+text",
-        marker=dict(size=12, color=df_mapa["cor_ponto"], opacity=1.0),
-        text=df_mapa["label_exibicao"],
-        textfont=dict(size=13, color="white"), 
-        textposition="top right", 
-        hoverinfo="text"
+        lat=df_mapa["latitude"], lon=df_mapa["longitude"], mode="markers+text",
+        marker=dict(size=12, color=df_mapa["status"].str.lower().map({"online": "#00FF00", "offline": "#FF0000"}).fillna("#888")),
+        text=df_mapa["label"], textposition="top right"
     ))
+    fig_mapa.update_layout(height=600, margin=dict(l=0,r=0,t=0,b=0), mapbox=dict(accesstoken=MAPBOX_TOKEN, style="satellite-streets", zoom=15, center=dict(lat=df_mapa["latitude"].mean(), lon=df_mapa["longitude"].mean())))
+    st.plotly_chart(fig_mapa, use_container_width=True)
 
-    fig_mapa.update_layout(
-        height=600, margin=dict(l=0, r=0, t=0, b=0),
-        mapbox=dict(
-            accesstoken=MAPBOX_TOKEN, 
-            style="satellite-streets", 
-            zoom=15,
-            center=dict(lat=df_mapa["latitude"].mean(), lon=df_mapa["longitude"].mean()),
-        ),
-        showlegend=False
-    )
-    st.plotly_chart(fig_mapa, use_container_width=True, config={'scrollZoom': True})
-else:
-    st.info("Coordenadas geográficas não disponíveis.")
-
-# ======================================================
-# TABELA E DOWNLOAD
-# ======================================================
-with st.expander("📋 Ver Tabela de Dados"):
+with st.expander("📋 Ver Tabela"):
     st.dataframe(df_final[["data_leitura", "device_name", "tipo_sensor", "valor_sensor"]], use_container_width=True)
-    st.download_button("📥 CSV", df_final.to_csv(index=False).encode("utf-8"), "dados.csv", "text/csv")
+    st.download_button("📥 CSV", df_final.to_csv(index=False).encode("utf-8"), "dados.csv")
