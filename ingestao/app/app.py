@@ -19,6 +19,63 @@ APP_PASSWORD = os.getenv("APP_PASSWORD", "orion123")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 
 # ======================================================
+# FUNÇÕES DE BANCO DE DADOS (EXISTENTES + NOVA)
+# ======================================================
+@st.cache_data(ttl=300)
+def carregar_dados_db():
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE devices ADD COLUMN IF NOT EXISTS reference TEXT;"))
+        conn.execute(text("ALTER TABLE devices ADD COLUMN IF NOT EXISTS battery_percentage FLOAT;"))
+        conn.commit()
+    
+    query = """
+        SELECT l.data_leitura, l.valor_sensor, s.sensor_id, s.tipo_sensor, 
+               d.device_name, d.reference, d.latitude, d.longitude, d.status,
+               d.battery_percentage
+        FROM leituras l
+        JOIN sensores s ON l.sensor_id = s.sensor_id
+        JOIN devices d ON s.device_id = d.device_id
+        ORDER BY l.data_leitura
+    """
+    df = pd.read_sql(query, engine)
+    
+    if not df.empty and "reference" in df.columns:
+        df["reference"] = (
+            df["reference"]
+            .fillna("Sem Referência")
+            .str.replace("–", "-", regex=False)
+            .str.replace("—", "-", regex=False)
+            .str.strip()
+        )
+    return df
+
+def apagar_leitura_db(data_hora, device_name, tipo_sensor):
+    """Nova função para remover dado específico do banco"""
+    try:
+        with engine.connect() as conn:
+            # Busca o sensor_id correto para garantir precisão no delete
+            query_find = text("""
+                SELECT s.sensor_id 
+                FROM sensores s 
+                JOIN devices d ON s.device_id = d.device_id 
+                WHERE d.device_name = :dev AND s.tipo_sensor = :tipo
+            """)
+            result = conn.execute(query_find, {"dev": device_name, "tipo": tipo_sensor}).fetchone()
+            
+            if result:
+                sid = result[0]
+                query_del = text("""
+                    DELETE FROM leituras 
+                    WHERE sensor_id = :sid AND data_leitura = :dt
+                """)
+                conn.execute(query_del, {"sid": sid, "dt": data_hora})
+                conn.commit()
+                return True
+    except Exception as e:
+        st.error(f"Erro ao deletar no banco de dados: {e}")
+    return False
+
+# ======================================================
 # AUTENTICAÇÃO
 # ======================================================
 if "auth_ok" not in st.session_state:
@@ -49,37 +106,8 @@ CORES_SENSOR = {
 PALETA_DEVICES = ["#636EFA", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880"]
 
 # ======================================================
-# CARREGAMENTO DE DADOS
+# PROCESSAMENTO DE DADOS
 # ======================================================
-@st.cache_data(ttl=300)
-def carregar_dados_db():
-    with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE devices ADD COLUMN IF NOT EXISTS reference TEXT;"))
-        conn.execute(text("ALTER TABLE devices ADD COLUMN IF NOT EXISTS battery_percentage FLOAT;"))
-        conn.commit()
-    
-    # Query atualizada para trazer battery_percentage da tabela devices (d)
-    query = """
-        SELECT l.data_leitura, l.valor_sensor, s.sensor_id, s.tipo_sensor, 
-               d.device_name, d.reference, d.latitude, d.longitude, d.status,
-               d.battery_percentage
-        FROM leituras l
-        JOIN sensores s ON l.sensor_id = s.sensor_id
-        JOIN devices d ON s.device_id = d.device_id
-        ORDER BY l.data_leitura
-    """
-    df = pd.read_sql(query, engine)
-    
-    if not df.empty and "reference" in df.columns:
-        df["reference"] = (
-            df["reference"]
-            .fillna("Sem Referência")
-            .str.replace("–", "-", regex=False)
-            .str.replace("—", "-", regex=False)
-            .str.strip()
-        )
-    return df
-
 df_raw = carregar_dados_db()
 
 if df_raw.empty:
@@ -169,8 +197,11 @@ else:
     df_final["valor_grafico"] = df_final["valor_sensor"]
 
 # ======================================================
-# GRÁFICO PRINCIPAL
+# GRÁFICO PRINCIPAL COM INTERAÇÃO DE EXCLUSÃO
 # ======================================================
+st.subheader("📈 Gráfico de Monitoramento")
+st.info("💡 Para apagar um dado: clique em um ponto do gráfico e confirme a exclusão abaixo.")
+
 fig = go.Figure()
 num_devs = len(devices_selecionados)
 dev_col_map = {dev: PALETA_DEVICES[i % len(PALETA_DEVICES)] for i, dev in enumerate(devices_selecionados)}
@@ -187,39 +218,63 @@ for serie in (df_final["device_name"] + " | " + df_final["tipo_sensor"]).unique(
         style["dash"] = "dash" if num_devs == 1 else "dot"
         if num_devs == 1: style["color"] = "#ef4444"
 
-    fig.add_trace(go.Scatter(x=d_plot["data_leitura"], y=d_plot["valor_grafico"], 
-                             name=serie, line=style, yaxis="y2" if eixo_2 else "y"))
+    fig.add_trace(go.Scatter(
+        x=d_plot["data_leitura"], 
+        y=d_plot["valor_grafico"], 
+        name=serie, 
+        line=style, 
+        yaxis="y2" if eixo_2 else "y",
+        mode='lines+markers',
+        customdata=d_plot[['device_name', 'tipo_sensor']],
+        hovertemplate="<b>%{x}</b><br>Valor: %{y}<extra></extra>"
+    ))
 
 fig.update_layout(
     height=650, 
-    hovermode="x unified",
+    hovermode="closest", 
+    clickmode='event+select',
     yaxis=dict(title="Leitura", fixedrange=False), 
     yaxis2=dict(title="Temp (°C)", overlaying="y", side="right", fixedrange=False),
     xaxis=dict(title="Data/Hora", fixedrange=False),
     legend=dict(orientation="h", y=-0.2)
 )
 
-st.plotly_chart(fig, use_container_width=True, config={
+# Renderiza o gráfico e captura a seleção
+selecao = st.plotly_chart(fig, use_container_width=True, on_select="rerun", config={
     'scrollZoom': True,           
     'displayModeBar': True,       
-    'modeBarButtonsToAdd': ['zoomIn2d', 'zoomOut2d', 'autoScale2d'],
     'displaylogo': False
 })
 
+# Lógica de Exclusão (Aparece apenas se um ponto for clicado)
+if selecao and "selection" in selecao and len(selecao["selection"]["points"]) > 0:
+    ponto = selecao["selection"]["points"][0]
+    dt_clicada = ponto["x"]
+    label_serie = ponto["fullData"]["name"].split(" | ")
+    dev_clicado = label_serie[0]
+    tipo_clicado = label_serie[1]
+    
+    st.warning(f"⚠️ Confirmar exclusão definitiva do ponto: **{dt_clicada}** do sensor **{dev_clicado} ({tipo_clicado})**?")
+    c1, c2 = st.columns(2)
+    if c1.button("🗑️ Sim, apagar do banco"):
+        if apagar_leitura_db(dt_clicada, dev_clicado, tipo_clicado):
+            st.success("Dado removido!")
+            st.cache_data.clear() # Limpa cache para refletir a mudança
+            st.rerun()
+    if c2.button("Cancelar"):
+        st.rerun()
+
 # ======================================================
-# MAPA (TEXTO EM UMA LINHA E POSICIONADO AO LADO/CIMA)
+# MAPA
 # ======================================================
 st.subheader("🛰️ Localização dos Dispositivos")
 df_mapa = df_status[["device_name", "latitude", "longitude", "status", "battery_percentage"]].drop_duplicates().dropna(subset=["latitude", "longitude"])
 
 if not df_mapa.empty:
-    # Função para criar o nome com a bateria em uma única linha
     def formatar_label_mapa(row):
         nome = str(row["device_name"])
         bat = row["battery_percentage"]
-        if pd.notnull(bat):
-            return f"{nome} ({int(bat)}%)" # Tudo na mesma linha
-        return nome
+        return f"{nome} ({int(bat)}%)" if pd.notnull(bat) else nome
 
     df_mapa["label_exibicao"] = df_mapa.apply(formatar_label_mapa, axis=1)
     df_mapa["cor_ponto"] = df_mapa["status"].str.lower().apply(lambda x: "#00FF00" if x == "online" else "#FF0000")
@@ -228,17 +283,9 @@ if not df_mapa.empty:
         lat=df_mapa["latitude"], 
         lon=df_mapa["longitude"],
         mode="markers+text",
-        marker=dict(
-            size=12, 
-            color=df_mapa["cor_ponto"], 
-            opacity=1.0 
-        ),
+        marker=dict(size=12, color=df_mapa["cor_ponto"], opacity=1.0),
         text=df_mapa["label_exibicao"],
-        textfont=dict(
-            size=13, 
-            color="white"
-        ), 
-        # 'top right' evita que o início do texto bata no centro da bolinha
+        textfont=dict(size=13, color="white"), 
         textposition="top right", 
         hoverinfo="text"
     ))
