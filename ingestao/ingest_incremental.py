@@ -28,11 +28,10 @@ REQUEST_TIMEOUT = 45
 MAX_WORKERS     = 4
 PAGE_SIZE       = 500
 
-TIPOS_VALIDOS = (
-    "A-Axis Delta Angle",
-    "B-Axis Delta Angle",
-    "Air Temperature",
-    "Device Temperature",
+# Captura todos os tipos de sensor retornados pela API, exceto os listados aqui.
+# "Unallocated" = canal nao configurado no datalogger, sem dado util.
+TIPOS_EXCLUIDOS = (
+    "Unallocated",
 )
 
 API_MIN_INTERVAL = 0.5
@@ -137,7 +136,7 @@ def carregar_cursores(sensor_ids: list, gap_fill: bool = False) -> dict:
     return cursores
 
 # ======================================================
-# WORKER POR SENSOR  ← mudança principal
+# WORKER POR SENSOR
 # ======================================================
 
 def worker_sensor(token, device_id, sensor_id, inicio, agora):
@@ -238,7 +237,7 @@ def obter_token() -> str:
 # ======================================================
 
 def cadastrar_devices_e_sensores(token) -> dict:
-    """Retorna {device_id: [sensor_id, ...]} apenas com sensores de tipos válidos."""
+    """Retorna {device_id: [sensor_id, ...]} com todos os sensores, exceto os tipos excluídos."""
     conn = get_conn()
     cur  = conn.cursor()
     aguardar_rate_limit()
@@ -279,7 +278,7 @@ def cadastrar_devices_e_sensores(token) -> dict:
         sensores_validos = []
         for sensor in device.get("sensors", []):
             tipo = (sensor.get("sensorType") or "").strip()
-            if tipo in TIPOS_VALIDOS:
+            if tipo and tipo not in TIPOS_EXCLUIDOS:
                 sid = sensor["sensorId"]
                 sensores_validos.append(sid)
                 cur.execute("""
