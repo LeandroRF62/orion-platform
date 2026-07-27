@@ -9,34 +9,33 @@ from urllib3.util.retry import Retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import time
-import argparse
 
 # ======================================================
 # CONFIG
 # ======================================================
 
-API_KEY      = os.getenv("API_KEY")
-BASE_URL     = "https://api.oriondata.io/api"
+API_KEY = os.getenv("API_KEY")
+BASE_URL = "https://api.oriondata.io/api"
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Modo normal: incremental a partir da última leitura real
-# Modo gap-fill: varre desde DATA_GAP_FILL para detectar buracos
-DATA_INICIAL_HISTORICO = "2026-01-01T00:00:00"
-DATA_GAP_FILL          = "2026-01-01T00:00:00"
-
+DATA_INICIAL_HISTORICO = "2025-01-01T00:00:00"
 REQUEST_TIMEOUT = 45
-MAX_WORKERS     = 4
-PAGE_SIZE       = 500
+MAX_WORKERS = 4
+PAGE_SIZE = 500
 
-# Captura todos os tipos de sensor retornados pela API, exceto os listados aqui.
-# "Unallocated" = canal nao configurado no datalogger, sem dado util.
-TIPOS_EXCLUIDOS = (
-    "Unallocated",
+TIPOS_VALIDOS = (
+    "A-Axis Delta Angle",
+    "B-Axis Delta Angle",
+    "Air Temperature",
+    "Device Temperature",
+    "Water Level",        # vertedouros
+    "Water Temperature",  # vertedouros
 )
 
 API_MIN_INTERVAL = 0.5
-api_lock         = threading.Lock()
-ultimo_request   = 0
+
+api_lock = threading.Lock()
+ultimo_request = 0
 
 def aguardar_rate_limit():
     global ultimo_request
@@ -48,18 +47,14 @@ def aguardar_rate_limit():
         ultimo_request = time.time()
 
 # ======================================================
-# SESSION HTTP
+# SESSION
 # ======================================================
 
 session = requests.Session()
 retries = Retry(total=5, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504])
 session.mount("https://", HTTPAdapter(max_retries=retries))
 
-# ======================================================
-# CONNECTION POOL
-# ======================================================
-
-db_pool   = SimpleConnectionPool(minconn=1, maxconn=MAX_WORKERS + 4, dsn=DATABASE_URL)
+db_pool = SimpleConnectionPool(minconn=1, maxconn=MAX_WORKERS + 2, dsn=DATABASE_URL)
 pool_lock = threading.Lock()
 
 def get_conn():
@@ -71,89 +66,42 @@ def release_conn(conn):
         db_pool.putconn(conn)
 
 # ======================================================
-# SCHEMA
+# SINCRONIZAÇÃO
 # ======================================================
 
-def garantir_schema():
+def carregar_sync_state():
     conn = get_conn()
-    cur  = conn.cursor()
+    cur = conn.cursor()
     cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS reference TEXT;")
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS sync_state (
-            sensor_id      BIGINT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS sync_state(
+            sensor_id BIGINT PRIMARY KEY,
             last_timestamp TIMESTAMP
         );
     """)
+    cur.execute("SELECT sensor_id, last_timestamp FROM sync_state;")
+    rows = cur.fetchall()
     conn.commit()
     cur.close()
     release_conn(conn)
 
-# ======================================================
-# CURSOR POR SENSOR — fonte real: tabela leituras
-# ======================================================
+    return {
+        sid: (ts - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        for sid, ts in rows if ts
+    }
 
-def carregar_cursores(sensor_ids: list, gap_fill: bool = False) -> dict:
-    """
-    Retorna {sensor_id: "YYYY-MM-DDTHH:MM:SS"} com o ponto de partida
-    para cada sensor.
-
-    Modo normal  (gap_fill=False):
-      → usa MAX(data_leitura) de cada sensor em `leituras`, menos 1h de margem.
-        Se não há leitura, usa DATA_INICIAL_HISTORICO.
-
-    Modo gap-fill (gap_fill=True):
-      → força todos os sensores a iniciarem em DATA_GAP_FILL,
-        independentemente do que já existe no banco.
-        O ON CONFLICT DO NOTHING na inserção garante que dados duplicados
-        sejam ignorados — apenas os buracos serão preenchidos.
-    """
-    if gap_fill:
-        print(f"🔍 Modo GAP-FILL: todos os sensores serão varridos desde {DATA_GAP_FILL}")
-        return {sid: DATA_GAP_FILL for sid in sensor_ids}
-
-    if not sensor_ids:
-        return {}
-
+def worker_device(token, device_id, sensor_ids, sync_map, agora):
     conn = get_conn()
-    cur  = conn.cursor()
-    placeholders = ",".join(["%s"] * len(sensor_ids))
-    cur.execute(
-        f"SELECT sensor_id, MAX(data_leitura) FROM leituras "
-        f"WHERE sensor_id IN ({placeholders}) GROUP BY sensor_id",
-        sensor_ids,
-    )
-    rows = {sid: ts for sid, ts in cur.fetchall()}
-    cur.close()
-    release_conn(conn)
-
-    cursores = {}
-    for sid in sensor_ids:
-        ts = rows.get(sid)
-        if ts:
-            cursores[sid] = (ts - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
-        else:
-            cursores[sid] = DATA_INICIAL_HISTORICO
-    return cursores
-
-# ======================================================
-# WORKER POR SENSOR
-# ======================================================
-
-def worker_sensor(token, device_id, sensor_id, inicio, agora):
-    """
-    Baixa e salva leituras de UM único sensor com paginação completa.
-
-    Ao usar um sensor por worker:
-    - O cursor é exato para aquele sensor
-    - O offset não é contaminado por dados de outros sensores
-    - Gaps individuais são detectados e preenchidos corretamente
-    """
-    conn    = get_conn()
-    cur     = conn.cursor()
+    cur = conn.cursor()
     headers = {"Authorization": f"Bearer {token}"}
 
+    inicio = min([sync_map.get(s, DATA_INICIAL_HISTORICO) for s in sensor_ids])
+    sensor_param = ",".join(map(str, sensor_ids))
+
     current_offset = 0
-    total_sensor   = 0
+    total_device = 0
+
+    print(f"🛰️ Device {device_id} -> Buscando desde {inicio}")
 
     while True:
         aguardar_rate_limit()
@@ -163,71 +111,64 @@ def worker_sensor(token, device_id, sensor_id, inicio, agora):
                 f"{BASE_URL}/SensorData",
                 headers=headers,
                 params={
-                    "version":   "1.3",
+                    "version": "1.3",
                     "startDate": inicio,
-                    "endDate":   agora,
-                    "offset":    current_offset,
-                    "limit":     PAGE_SIZE,
-                    "sensorIds": str(sensor_id),   # ← UM sensor por request
+                    "endDate": agora,
+                    "offset": current_offset,
+                    "limit": PAGE_SIZE,
+                    "sensorIds": sensor_param
                 },
-                timeout=REQUEST_TIMEOUT,
+                timeout=REQUEST_TIMEOUT
             )
             r.raise_for_status()
             dados = r.json()
         except Exception as e:
-            print(f"  ⚠️  sensor {sensor_id} (dev {device_id}) offset={current_offset}: {e}")
+            print(f"⚠️ Erro no request do device {device_id}: {e}")
             break
 
         qtd = len(dados)
         if qtd == 0:
             break
 
-        registros = [
-            (d["sensorId"], d["readingDate"], d["sensorValue"])
-            for d in dados
-        ]
+        registros = [(d["sensorId"], d["readingDate"], d["sensorValue"]) for d in dados]
 
         execute_batch(cur, """
-            INSERT INTO leituras (sensor_id, data_leitura, valor_sensor)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (sensor_id, data_leitura) DO NOTHING
+            INSERT INTO leituras(sensor_id, data_leitura, valor_sensor)
+            VALUES(%s, %s, %s)
+            ON CONFLICT(sensor_id, data_leitura) DO NOTHING
         """, registros)
 
-        # Atualiza sync_state (diagnóstico)
-        max_ts = max(d["readingDate"] for d in dados)
-        cur.execute("""
-            INSERT INTO sync_state (sensor_id, last_timestamp)
-            VALUES (%s, %s)
-            ON CONFLICT (sensor_id) DO UPDATE
+        max_ts_batch = max([d["readingDate"] for d in dados])
+        for sid in sensor_ids:
+            cur.execute("""
+                INSERT INTO sync_state(sensor_id, last_timestamp)
+                VALUES(%s, %s)
+                ON CONFLICT(sensor_id) DO UPDATE
                 SET last_timestamp = EXCLUDED.last_timestamp
-            WHERE sync_state.last_timestamp IS NULL
-               OR sync_state.last_timestamp < EXCLUDED.last_timestamp
-        """, (sensor_id, max_ts))
+                WHERE sync_state.last_timestamp < EXCLUDED.last_timestamp
+            """, (sid, max_ts_batch))
 
         conn.commit()
-        total_sensor   += qtd
+        total_device += qtd
         current_offset += qtd
 
         if qtd < PAGE_SIZE:
             break
 
-    if total_sensor > 0:
-        print(f"  ✅ sensor {sensor_id} (dev {device_id}): {total_sensor} leituras desde {inicio}")
-
     cur.close()
     release_conn(conn)
-    return total_sensor
+    return total_device
 
 # ======================================================
 # TOKEN
 # ======================================================
 
-def obter_token() -> str:
+def obter_token():
     aguardar_rate_limit()
     r = session.get(
         f"{BASE_URL}/token",
         params={"apiKey": API_KEY},
-        timeout=REQUEST_TIMEOUT,
+        timeout=REQUEST_TIMEOUT
     )
     r.raise_for_status()
     return r.json()["token"]
@@ -236,29 +177,28 @@ def obter_token() -> str:
 # DEVICES E SENSORES
 # ======================================================
 
-def cadastrar_devices_e_sensores(token) -> dict:
-    """Retorna {device_id: [sensor_id, ...]} com todos os sensores, exceto os tipos excluídos."""
+def cadastrar_devices_e_sensores(token):
     conn = get_conn()
-    cur  = conn.cursor()
+    cur = conn.cursor()
     aguardar_rate_limit()
 
     r = session.get(
         f"{BASE_URL}/UserDevices",
         headers={"Authorization": f"Bearer {token}"},
-        timeout=REQUEST_TIMEOUT,
+        timeout=REQUEST_TIMEOUT
     )
     r.raise_for_status()
 
     mapa_devices = {}
     for device in r.json():
         cur.execute("""
-            INSERT INTO devices (
+            INSERT INTO devices(
                 device_id, device_name, serial_number, status,
                 latitude, longitude, last_upload,
                 battery_percentage, last_status, reference
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (device_id) DO UPDATE SET
+            VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT(device_id) DO UPDATE SET
                 device_name        = EXCLUDED.device_name,
                 status             = EXCLUDED.status,
                 latitude           = EXCLUDED.latitude,
@@ -268,24 +208,38 @@ def cadastrar_devices_e_sensores(token) -> dict:
                 last_status        = EXCLUDED.last_status,
                 reference          = EXCLUDED.reference;
         """, (
-            device["deviceId"], device["deviceName"],
-            device.get("serialNumber"), device.get("status"),
-            device.get("latitude"), device.get("longitude"),
-            device.get("lastUpload"), device.get("batteryPercentage"),
-            device.get("lastStatus"), device.get("reference"),
+            device["deviceId"],
+            device["deviceName"],
+            device.get("serialNumber"),
+            device.get("status"),
+            device.get("latitude"),
+            device.get("longitude"),
+            device.get("lastUpload"),
+            device.get("batteryPercentage"),
+            device.get("lastStatus"),
+            device.get("reference")
         ))
 
         sensores_validos = []
         for sensor in device.get("sensors", []):
             tipo = (sensor.get("sensorType") or "").strip()
-            if tipo and tipo not in TIPOS_EXCLUIDOS:
+            if tipo in TIPOS_VALIDOS:
                 sid = sensor["sensorId"]
                 sensores_validos.append(sid)
                 cur.execute("""
-                    INSERT INTO sensores (sensor_id, device_id, nome_customizado, tipo_sensor, unidade_medida)
-                    VALUES (%s,%s,%s,%s,%s)
-                    ON CONFLICT (sensor_id) DO NOTHING;
-                """, (sid, device["deviceId"], sensor.get("customName"), tipo, sensor.get("uom")))
+                    INSERT INTO sensores(
+                        sensor_id, device_id, nome_customizado,
+                        tipo_sensor, unidade_medida
+                    )
+                    VALUES(%s, %s, %s, %s, %s)
+                    ON CONFLICT(sensor_id) DO NOTHING;
+                """, (
+                    sid,
+                    device["deviceId"],
+                    sensor.get("customName"),
+                    tipo,
+                    sensor.get("uom")
+                ))
 
         if sensores_validos:
             mapa_devices[device["deviceId"]] = sensores_validos
@@ -296,63 +250,32 @@ def cadastrar_devices_e_sensores(token) -> dict:
     return mapa_devices
 
 # ======================================================
-# ORQUESTRADOR
+# LEITURAS
 # ======================================================
 
-def baixar_e_salvar_leituras(token, mapa_devices, gap_fill: bool = False):
-    # Achata todos os (device_id, sensor_id) em uma lista plana
-    tarefas = [
-        (did, sid)
-        for did, sids in mapa_devices.items()
-        for sid in sids
-    ]
-    todos_sensor_ids = [sid for _, sid in tarefas]
-
-    cursores = carregar_cursores(todos_sensor_ids, gap_fill=gap_fill)
-    agora    = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    total    = 0
-
-    print(f"\n📡 {len(tarefas)} sensores para processar | endDate={agora}")
-    if gap_fill:
-        print(f"🔁 GAP-FILL ativo: varrendo desde {DATA_GAP_FILL} em todos os sensores\n")
+def baixar_e_salvar_leituras(token, mapa_devices):
+    sync_map = carregar_sync_state()
+    agora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    total = 0
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
-            executor.submit(
-                worker_sensor, token, did, sid, cursores[sid], agora
-            ): (did, sid)
-            for did, sid in tarefas
+            executor.submit(worker_device, token, did, sids, sync_map, agora): did
+            for did, sids in mapa_devices.items()
         }
         for f in as_completed(futures):
-            did, sid = futures[f]
-            try:
-                total += f.result()
-            except Exception as e:
-                print(f"  💥 Falha sensor {sid} (dev {did}): {e}")
+            total += f.result()
 
-    print(f"\n✅ TOTAL DE LEITURAS PROCESSADAS: {total}")
+    print(f"🌌 TOTAL DE LEITURAS PROCESSADAS: {total}")
 
 # ======================================================
 # MAIN
 # ======================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ingestão incremental Orion → Supabase")
-    parser.add_argument(
-        "--gap-fill",
-        action="store_true",
-        help=(
-            f"Varre todos os sensores desde {DATA_GAP_FILL} para detectar e "
-            "preencher buracos. Dados já existentes são ignorados (ON CONFLICT DO NOTHING)."
-        ),
-    )
-    args = parser.parse_args()
-
     try:
-        garantir_schema()
-        tk     = obter_token()
+        tk = obter_token()
         m_devs = cadastrar_devices_e_sensores(tk)
-        baixar_e_salvar_leituras(tk, m_devs, gap_fill=args.gap_fill)
+        baixar_e_salvar_leituras(tk, m_devs)
     except Exception as e:
-        print(f"💥 ERRO FATAL: {e}")
-        raise
+        print(f"💥 ERRO: {e}")
