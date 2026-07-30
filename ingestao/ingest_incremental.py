@@ -30,6 +30,7 @@ TIPOS_VALIDOS = (
     "Device Temperature",
     "Water Level",        # vertedouros
     "Water Temperature",  # vertedouros
+    "Rainfall",           # pluviometros
 )
 
 API_MIN_INTERVAL = 0.5
