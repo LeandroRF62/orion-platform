@@ -13,11 +13,9 @@ import time
 # ======================================================
 # CONFIG
 # ======================================================
-
 API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://api.oriondata.io/api"
 DATABASE_URL = os.getenv("DATABASE_URL")
-
 DATA_INICIAL_HISTORICO = "2025-01-01T00:00:00"
 REQUEST_TIMEOUT = 45
 MAX_WORKERS = 4
@@ -31,12 +29,14 @@ TIPOS_VALIDOS = (
     "Water Level",        # vertedouros
     "Water Temperature",  # vertedouros
     "Rainfall",           # pluviometros
+    "VWP (Frequency)",    # piezometro de corda vibrante - leitura bruta em Hz
+    "VWP (Temp)",         # termistor do piezometro
 )
 
 API_MIN_INTERVAL = 0.5
-
 api_lock = threading.Lock()
 ultimo_request = 0
+
 
 def aguardar_rate_limit():
     global ultimo_request
@@ -47,10 +47,10 @@ def aguardar_rate_limit():
             time.sleep(API_MIN_INTERVAL - delta)
         ultimo_request = time.time()
 
+
 # ======================================================
 # SESSION
 # ======================================================
-
 session = requests.Session()
 retries = Retry(total=5, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504])
 session.mount("https://", HTTPAdapter(max_retries=retries))
@@ -58,18 +58,20 @@ session.mount("https://", HTTPAdapter(max_retries=retries))
 db_pool = SimpleConnectionPool(minconn=1, maxconn=MAX_WORKERS + 2, dsn=DATABASE_URL)
 pool_lock = threading.Lock()
 
+
 def get_conn():
     with pool_lock:
         return db_pool.getconn()
+
 
 def release_conn(conn):
     with pool_lock:
         db_pool.putconn(conn)
 
+
 # ======================================================
 # SINCRONIZAÇÃO
 # ======================================================
-
 def carregar_sync_state():
     conn = get_conn()
     cur = conn.cursor()
@@ -85,11 +87,11 @@ def carregar_sync_state():
     conn.commit()
     cur.close()
     release_conn(conn)
-
     return {
         sid: (ts - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
         for sid, ts in rows if ts
     }
+
 
 def worker_device(token, device_id, sensor_ids, sync_map, agora):
     conn = get_conn()
@@ -106,7 +108,6 @@ def worker_device(token, device_id, sensor_ids, sync_map, agora):
 
     while True:
         aguardar_rate_limit()
-
         try:
             r = session.get(
                 f"{BASE_URL}/SensorData",
@@ -160,10 +161,10 @@ def worker_device(token, device_id, sensor_ids, sync_map, agora):
     release_conn(conn)
     return total_device
 
+
 # ======================================================
 # TOKEN
 # ======================================================
-
 def obter_token():
     aguardar_rate_limit()
     r = session.get(
@@ -174,15 +175,15 @@ def obter_token():
     r.raise_for_status()
     return r.json()["token"]
 
+
 # ======================================================
 # DEVICES E SENSORES
 # ======================================================
-
 def cadastrar_devices_e_sensores(token):
     conn = get_conn()
     cur = conn.cursor()
-    aguardar_rate_limit()
 
+    aguardar_rate_limit()
     r = session.get(
         f"{BASE_URL}/UserDevices",
         headers={"Authorization": f"Bearer {token}"},
@@ -191,6 +192,7 @@ def cadastrar_devices_e_sensores(token):
     r.raise_for_status()
 
     mapa_devices = {}
+
     for device in r.json():
         cur.execute("""
             INSERT INTO devices(
@@ -222,6 +224,7 @@ def cadastrar_devices_e_sensores(token):
         ))
 
         sensores_validos = []
+
         for sensor in device.get("sensors", []):
             tipo = (sensor.get("sensorType") or "").strip()
             if tipo in TIPOS_VALIDOS:
@@ -250,10 +253,10 @@ def cadastrar_devices_e_sensores(token):
     release_conn(conn)
     return mapa_devices
 
+
 # ======================================================
 # LEITURAS
 # ======================================================
-
 def baixar_e_salvar_leituras(token, mapa_devices):
     sync_map = carregar_sync_state()
     agora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
@@ -269,10 +272,10 @@ def baixar_e_salvar_leituras(token, mapa_devices):
 
     print(f"🌌 TOTAL DE LEITURAS PROCESSADAS: {total}")
 
+
 # ======================================================
 # MAIN
 # ======================================================
-
 if __name__ == "__main__":
     try:
         tk = obter_token()
