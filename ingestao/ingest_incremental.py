@@ -166,8 +166,81 @@ def obter_token():
     r = session.get(f"{BASE_URL}/token",
                     params={"apiKey": API_KEY},
                     timeout=REQUEST_TIMEOUT)
+    if r.status_code in (401, 403):
+        raise SystemExit(
+            f"❌ A Orion recusou a API_KEY ({r.status_code}). Confira o secret "
+            f"API_KEY no GitHub (chave revogada/trocada?). Resposta: {r.text[:200]}")
     r.raise_for_status()
     return r.json()["token"]
+
+
+# O token da Orion expira. Antes ele era pedido uma única vez no início e
+# reaproveitado até o fim; como o cadastro de devices/sensores leva alguns
+# minutos, quando o download começava o token já tinha vencido e TODAS as
+# chamadas ao /SensorData voltavam 401 Unauthorized.
+TOKEN_TTL_SEG = 8 * 60          # renova preventivamente a cada 8 min
+MAX_401_SEGUIDOS = 5            # depois disso aborta em vez de martelar a API
+
+
+class GerenciadorToken:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._token = None
+        self._obtido_em = 0.0
+        self.falhas_401 = 0
+        self.abortar = False
+
+    def _renovar(self):
+        self._token = obter_token()
+        self._obtido_em = time.time()
+        print("🔑 Token Orion renovado")
+
+    def get(self):
+        with self._lock:
+            if self._token is None or time.time() - self._obtido_em > TOKEN_TTL_SEG:
+                self._renovar()
+            return self._token
+
+    def renovar_se_igual(self, token_usado):
+        """Chamado após um 401. Só renova se outra thread ainda não renovou."""
+        with self._lock:
+            if self._token == token_usado:
+                self._renovar()
+            return self._token
+
+    def headers(self):
+        return {"Authorization": f"Bearer {self.get()}"}
+
+    def registrar_401(self):
+        with self._lock:
+            self.falhas_401 += 1
+            if self.falhas_401 >= MAX_401_SEGUIDOS:
+                self.abortar = True
+
+    def registrar_ok(self):
+        with self._lock:
+            self.falhas_401 = 0
+
+
+tokens = GerenciadorToken()
+
+
+def get_api(url, params=None):
+    """GET autenticado. Em 401 renova o token e tenta mais uma vez."""
+    for tentativa in range(2):
+        token = tokens.get()
+        aguardar_rate_limit()
+        r = session.get(url, headers={"Authorization": f"Bearer {token}"},
+                        params=params, timeout=REQUEST_TIMEOUT)
+        if r.status_code == 401 and tentativa == 0:
+            tokens.renovar_se_igual(token)
+            continue
+        if r.status_code == 401:
+            tokens.registrar_401()
+            raise RuntimeError(f"401 mesmo com token novo: {r.text[:200]}")
+        r.raise_for_status()
+        tokens.registrar_ok()
+        return r.json()
 
 
 # ======================================================
@@ -226,25 +299,23 @@ SQL_SENSOR = """
 """
 
 
-def cadastrar_devices_e_sensores(token):
+def cadastrar_devices_e_sensores():
     conn = get_conn()
     cur = conn.cursor()
     garantir_schema(cur)
+    conn.commit()
 
-    aguardar_rate_limit()
-    r = session.get(f"{BASE_URL}/UserDevices",
-                    headers={"Authorization": f"Bearer {token}"},
-                    timeout=REQUEST_TIMEOUT)
-    r.raise_for_status()
-    devices = r.json()
+    devices = get_api(f"{BASE_URL}/UserDevices")
 
     mapa_devices = {}
     total_sensores = 0
+    linhas_devices = []
+    linhas_sensores = []
 
     for device in devices:
         did = device["deviceId"]
 
-        cur.execute(SQL_DEVICE, (
+        linhas_devices.append((
             did,
             device.get("deviceName"),
             primeiro(device, "serialNumber", "serial"),
@@ -274,7 +345,7 @@ def cadastrar_devices_e_sensores(token):
             sensores_device.append(sid)
 
             base = primeiro(sensor, "baseSensorId", "parentSensorId")
-            cur.execute(SQL_SENSOR, (
+            linhas_sensores.append((
                 sid,
                 did,
                 sensor.get("customName"),
@@ -296,6 +367,9 @@ def cadastrar_devices_e_sensores(token):
         if sensores_device:
             mapa_devices[did] = sensores_device
 
+    # Em lote: milhares de INSERTs um a um para o Supabase levavam minutos.
+    execute_batch(cur, SQL_DEVICE, linhas_devices, page_size=200)
+    execute_batch(cur, SQL_SENSOR, linhas_sensores, page_size=500)
     conn.commit()
     cur.close()
     release_conn(conn)
@@ -323,18 +397,18 @@ SQL_CURSOR = """
 """
 
 
-def baixar_lote(cur, conn, headers, lote, inicio, agora):
+def baixar_lote(cur, conn, lote, inicio, agora):
     """Pagina um lote de sensores que compartilham a mesma data de início."""
     sensor_param = ",".join(map(str, lote))
     offset = 0
     total = 0
 
     while True:
-        aguardar_rate_limit()
+        if tokens.abortar:
+            break
         try:
-            r = session.get(
+            dados = get_api(
                 f"{BASE_URL}/SensorData",
-                headers=headers,
                 params={
                     "version": "1.3",
                     "startDate": inicio,
@@ -343,10 +417,7 @@ def baixar_lote(cur, conn, headers, lote, inicio, agora):
                     "limit": PAGE_SIZE,
                     "sensorIds": sensor_param,
                 },
-                timeout=REQUEST_TIMEOUT,
             )
-            r.raise_for_status()
-            dados = r.json()
         except Exception as e:
             print(f"⚠️ Erro no lote {lote[0]}..{lote[-1]}: {e}")
             break
@@ -378,10 +449,11 @@ def baixar_lote(cur, conn, headers, lote, inicio, agora):
     return total
 
 
-def worker_device(token, device_id, sensor_ids, sync_map, agora):
+def worker_device(device_id, sensor_ids, sync_map, agora):
+    if tokens.abortar:
+        return 0
     conn = get_conn()
     cur = conn.cursor()
-    headers = {"Authorization": f"Bearer {token}"}
 
     # Agrupa por data de início: sensores novos fazem o próprio backfill
     # sem arrastar os que já estão em dia.
@@ -393,21 +465,21 @@ def worker_device(token, device_id, sensor_ids, sync_map, agora):
     for inicio, ids in sorted(grupos.items()):
         print(f"🛰️ Device {device_id} | {len(ids):>3} sensor(es) desde {inicio}")
         for lote in em_lotes(ids, SENSOR_BATCH_SIZE):
-            total += baixar_lote(cur, conn, headers, lote, inicio, agora)
+            total += baixar_lote(cur, conn, lote, inicio, agora)
 
     cur.close()
     release_conn(conn)
     return total
 
 
-def baixar_e_salvar_leituras(token, mapa_devices):
+def baixar_e_salvar_leituras(mapa_devices):
     sync_map = carregar_sync_state()
     agora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     total = 0
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
-            executor.submit(worker_device, token, did, sids, sync_map, agora): did
+            executor.submit(worker_device, did, sids, sync_map, agora): did
             for did, sids in mapa_devices.items()
         }
         for f in as_completed(futures):
@@ -419,15 +491,20 @@ def baixar_e_salvar_leituras(token, mapa_devices):
 
     print(f"🌌 TOTAL DE LEITURAS PROCESSADAS: {total}")
 
+    if tokens.abortar:
+        # Falha o job no Actions para você ver em vermelho, em vez de
+        # terminar "verde" com centenas de 401 escondidos no log.
+        raise SystemExit("❌ Abortado: a Orion continuou respondendo 401 mesmo "
+                         "com token renovado. Verifique a API_KEY.")
+
 
 # ======================================================
 # MAIN
 # ======================================================
 if __name__ == "__main__":
     try:
-        tk = obter_token()
-        m_devs = cadastrar_devices_e_sensores(tk)
-        baixar_e_salvar_leituras(tk, m_devs)
+        m_devs = cadastrar_devices_e_sensores()
+        baixar_e_salvar_leituras(m_devs)
     except Exception as e:
         print(f"💥 ERRO: {e}")
         raise
