@@ -1,7 +1,8 @@
-streamlit
-pandas
-plotly
-sqlalchemy
+# Ingestão Orion -> Supabase (workflows do GitHub Actions)
+requests
+urllib3
 psycopg2-binary
-python-dotenv
 
+# Obs.: o alert_engine.py usa pandas e sqlalchemy, mas o workflow dele
+# instala essas bibliotecas na própria etapa (pip install pandas
+# sqlalchemy psycopg2-binary), então não dependem deste arquivo.
