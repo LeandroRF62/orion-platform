@@ -106,7 +106,13 @@ def obter_devices_db(conn):
 
 def obter_sensores_device(conn, device_id):
     cur = conn.cursor()
-    cur.execute("SELECT sensor_id FROM sensores WHERE device_id = %s", (device_id,))
+    # Soft sensors (Water Level, Water Level (RL), Pore Pressure) não são coletados.
+    cur.execute("""
+        SELECT sensor_id FROM sensores
+        WHERE device_id = %s
+          AND lower(coalesce(tipo_sensor, '')) NOT IN
+              ('water level', 'water level (rl)', 'pore pressure')
+    """, (device_id,))
     sensores = [r[0] for r in cur.fetchall()]
     cur.close()
     return sensores
