@@ -52,6 +52,19 @@ SENSOR_BATCH_SIZE = 50          # limite de sensorIds por chamada (tamanho da UR
 #                      "RSSI (Cellular)", "SINR (Cellular)")
 TIPOS_IGNORADOS = ()
 
+# Soft sensors (canais calculados na Orion a partir do VWP) NÃO são
+# coletados: as fórmulas são refeitas no software como TAG personalizada.
+# Detecta pelo flag da API, se existir, e pelo tipo do canal.
+TIPOS_SOFT = {"water level", "water level (rl)", "pore pressure"}
+
+
+def eh_soft_sensor(sensor):
+    flag = primeiro(sensor, "isSoftSensor", "isSoft")
+    if flag is not None:
+        return bool(flag)
+    tipo = (sensor.get("sensorType") or "").strip().lower()
+    return tipo in TIPOS_SOFT
+
 API_MIN_INTERVAL = 0.5
 api_lock = threading.Lock()
 ultimo_request = 0.0
@@ -311,6 +324,7 @@ def cadastrar_devices_e_sensores():
     total_sensores = 0
     linhas_devices = []
     linhas_sensores = []
+    ignorados_soft = 0
 
     for device in devices:
         did = device["deviceId"]
@@ -338,7 +352,8 @@ def cadastrar_devices_e_sensores():
         sensores_device = []
         for sensor in device.get("sensors", []):
             tipo = (sensor.get("sensorType") or "").strip()
-            if tipo in TIPOS_IGNORADOS:
+            if tipo in TIPOS_IGNORADOS or eh_soft_sensor(sensor):
+                ignorados_soft += 1
                 continue
 
             sid = sensor["sensorId"]
@@ -374,7 +389,8 @@ def cadastrar_devices_e_sensores():
     cur.close()
     release_conn(conn)
 
-    print(f"📋 {len(devices)} devices | {total_sensores} sensores cadastrados/atualizados")
+    print(f"📋 {len(devices)} devices | {total_sensores} sensores cadastrados/atualizados "
+          f"| {ignorados_soft} soft sensors ignorados")
     return mapa_devices
 
 
