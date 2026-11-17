@@ -31,6 +31,7 @@ DATA_INICIAL = os.getenv("DATA_INICIAL", "2026-01-01T00:00:00")
 DATA_FINAL = os.getenv("DATA_FINAL")
 
 BLOCO_DIAS = 7
+MAX_JANELAS = 400   # voltas da janela deslizante dentro de um bloco
 SENSOR_BATCH_SIZE = 50
 PAGE_SIZE = 500
 SLEEP = 0.3
@@ -59,6 +60,17 @@ SQL_CURSOR = """
 """
 
 erros = []
+
+
+def _parse_ts(txt):
+    """readingDate da Orion. Tolera 'Z', fração de segundo e offset."""
+    t = str(txt).strip().replace("Z", "+00:00")
+    try:
+        d = datetime.fromisoformat(t)
+    except ValueError:
+        t = t.split(".")[0].split("+")[0]
+        d = datetime.fromisoformat(t)
+    return d.replace(tzinfo=None)
 
 
 def gerar_blocos(inicio_str, fim_dt):
@@ -118,55 +130,80 @@ def run_backfill():
 
         for i in range(0, len(sensor_ids), SENSOR_BATCH_SIZE):
             lote = sensor_ids[i:i + SENSOR_BATCH_SIZE]
-            offset = 0
+            # A Orion não devolve o bloco inteiro de uma vez: a resposta para em
+            # poucos dias e vem com menos linhas que o limit, o que parecia fim
+            # dos dados. Por isso recomeçamos a janela na última leitura recebida
+            # até a API não devolver mais nada dentro do bloco.
+            janela = ini.strftime("%Y-%m-%dT%H:%M:%S")
+            fim_txt = fim.strftime("%Y-%m-%dT%H:%M:%S")
 
-            while True:
+            for _ in range(MAX_JANELAS):
+                offset = 0
+                maior = None
+                qtd_janela = 0
+                parar = False
+
+                while True:
+                    try:
+                        dados = token.get_api(
+                            f"{BASE_URL}/SensorData",
+                            params={
+                                "version": "1.3",
+                                "startDate": janela,
+                                "endDate": fim_txt,
+                                "offset": offset,
+                                "limit": PAGE_SIZE,
+                                "sensorIds": ",".join(map(str, lote)),
+                            },
+                        )
+                    except SystemExit:
+                        raise
+                    except Exception as e:
+                        msg = f"lote {lote[0]}..{lote[-1]} em {ini.date()} (desde {janela}): {e}"
+                        print(f"⚠️ Erro no {msg}")
+                        erros.append(msg)
+                        parar = True
+                        break
+
+                    qtd = len(dados)
+                    if qtd == 0:
+                        parar = True
+                        break
+
+                    execute_batch(cur, SQL_LEITURA,
+                                  [(d["sensorId"], d["readingDate"], d["sensorValue"])
+                                   for d in dados],
+                                  page_size=500)
+
+                    ultimos = {}
+                    for d in dados:
+                        sid, ts = d["sensorId"], d["readingDate"]
+                        if sid not in ultimos or ts > ultimos[sid]:
+                            ultimos[sid] = ts
+                        if maior is None or ts > maior:
+                            maior = ts
+                    for sid, ts in ultimos.items():
+                        cur.execute(SQL_CURSOR, (sid, ts))
+
+                    conn.commit()
+                    total_geral += qtd
+                    qtd_janela += qtd
+                    offset += qtd          # antes era "offset += 1"
+
+                    if qtd < PAGE_SIZE:
+                        break
+
+                    time.sleep(SLEEP)
+
+                if parar or qtd_janela == 0 or maior is None:
+                    break
                 try:
-                    dados = token.get_api(
-                        f"{BASE_URL}/SensorData",
-                        params={
-                            "version": "1.3",
-                            "startDate": ini.strftime("%Y-%m-%dT%H:%M:%S"),
-                            "endDate": fim.strftime("%Y-%m-%dT%H:%M:%S"),
-                            "offset": offset,
-                            "limit": PAGE_SIZE,
-                            "sensorIds": ",".join(map(str, lote)),
-                        },
-                    )
-                except SystemExit:
-                    raise
-                except Exception as e:
-                    msg = f"lote {lote[0]}..{lote[-1]} em {ini.date()}: {e}"
-                    print(f"⚠️ Erro no {msg}")
-                    erros.append(msg)
+                    proxima = (_parse_ts(maior) + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S")
+                except Exception:
                     break
-
-                qtd = len(dados)
-                if qtd == 0:
+                if proxima <= janela or proxima >= fim_txt:
                     break
-
-                execute_batch(cur, SQL_LEITURA,
-                              [(d["sensorId"], d["readingDate"], d["sensorValue"])
-                               for d in dados],
-                              page_size=500)
-
-                ultimos = {}
-                for d in dados:
-                    sid, ts = d["sensorId"], d["readingDate"]
-                    if sid not in ultimos or ts > ultimos[sid]:
-                        ultimos[sid] = ts
-                for sid, ts in ultimos.items():
-                    cur.execute(SQL_CURSOR, (sid, ts))
-
-                conn.commit()
-
-                total_geral += qtd
-                offset += qtd          # antes era "offset += 1"
-
-                if qtd < PAGE_SIZE:
-                    break
-
-                time.sleep(SLEEP)
+                janela = proxima
 
     cur.close()
     conn.close()
