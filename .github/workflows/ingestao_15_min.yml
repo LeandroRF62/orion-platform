@@ -12,9 +12,11 @@ concurrency:
 jobs:
   ingestao_incremental:
     runs-on: ubuntu-latest
-    # A execução levava 18 a 22 min com agendamento de 15 min, então havia
-    # sempre uma na fila. Corta em 14 min para a próxima começar limpa.
-    timeout-minutes: 14
+    # Enquanto a base está atrasada, uma execução precisa de bastante tempo
+    # para alcançar o presente. Depois que ficar em dia, cada execução passa a
+    # durar poucos minutos. O bloco "concurrency" acima garante que não há
+    # duas rodando ao mesmo tempo, mesmo que o cron dispare antes do fim.
+    timeout-minutes: 50
 
     steps:
       - name: Checkout do repositório
