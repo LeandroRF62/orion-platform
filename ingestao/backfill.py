@@ -1,29 +1,64 @@
 """
 Backfill histórico — roda sob demanda (workflow_dispatch ou local).
 
-Correção: a paginação fazia "offset += 1", reconsultando quase a mesma
-página a cada volta. Agora soma a quantidade recebida e manda "limit".
+Use quando precisar recuperar um período inteiro, por exemplo depois de a
+ingestão ficar parada por dias. A ingestão normal (ingest_incremental.py)
+já recupera sozinha pelo cursor, então o backfill é exceção.
+
+Correções em relação à versão anterior:
+1. O token era pedido uma vez só e não renovava. Num backfill de horas ele
+   expira no meio e tudo passa a voltar 401.
+2. Os erros eram só impressos e o job terminava verde.
+3. Trazia TODOS os sensores da tabela, inclusive os canais que a ingestão
+   não coleta. Agora respeita a mesma lista de tipos.
+4. Não gravava o cursor em sync_state, então a ingestão normal repetia
+   todo o período depois.
+
+Variáveis de ambiente opcionais:
+    DATA_INICIAL  padrão 2026-01-01T00:00:00
+    DATA_FINAL    padrão agora
 """
 
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
 from psycopg2.extras import execute_batch
 
-from common import get_session, obter_token, get_db_conn, BASE_URL
+from common import get_session, obter_token, get_db_conn, BASE_URL, REQUEST_TIMEOUT
 
-DATA_INICIAL = "2026-01-01T00:00:00"
+DATA_INICIAL = os.getenv("DATA_INICIAL", "2026-01-01T00:00:00")
+DATA_FINAL = os.getenv("DATA_FINAL")
+
 BLOCO_DIAS = 7
 SENSOR_BATCH_SIZE = 50
 PAGE_SIZE = 500
 SLEEP = 0.3
-REQUEST_TIMEOUT = 45
+TOKEN_TTL_SEG = 8 * 60
+
+# Mesma lista do ingest_incremental.py
+TIPOS_VALIDOS = (
+    "A-Axis Delta Angle", "B-Axis Delta Angle", "Air Temperature",
+    "Device Temperature", "Water Level", "Water Temperature", "Rainfall",
+    "VWP (Frequency)", "VWP (Temp)",
+)
 
 SQL_LEITURA = """
     INSERT INTO leituras (sensor_id, data_leitura, valor_sensor)
     VALUES (%s, %s, %s)
     ON CONFLICT (sensor_id, data_leitura) DO NOTHING
 """
+
+SQL_CURSOR = """
+    INSERT INTO sync_state(sensor_id, last_timestamp)
+    VALUES(%s, %s)
+    ON CONFLICT(sensor_id) DO UPDATE
+    SET last_timestamp = EXCLUDED.last_timestamp
+    WHERE sync_state.last_timestamp IS NULL
+       OR sync_state.last_timestamp < EXCLUDED.last_timestamp
+"""
+
+erros = []
 
 
 def gerar_blocos(inicio_str, fim_dt):
@@ -34,23 +69,52 @@ def gerar_blocos(inicio_str, fim_dt):
         inicio = fim
 
 
+class Token:
+    """Renova a cada 8 min e em qualquer 401."""
+
+    def __init__(self, session):
+        self.session = session
+        self.valor = None
+        self.em = 0.0
+
+    def get(self, forcar=False):
+        if forcar or self.valor is None or time.time() - self.em > TOKEN_TTL_SEG:
+            self.valor = obter_token(self.session)
+            self.em = time.time()
+            print("🔑 Token Orion renovado")
+        return self.valor
+
+    def get_api(self, url, params):
+        for tentativa in range(2):
+            r = self.session.get(
+                url, params=params, timeout=REQUEST_TIMEOUT,
+                headers={"Authorization": f"Bearer {self.get(forcar=tentativa == 1)}"})
+            if r.status_code == 401 and tentativa == 0:
+                continue
+            if r.status_code == 401:
+                raise SystemExit("❌ 401 mesmo com token novo — verifique a API_KEY.")
+            r.raise_for_status()
+            return r.json()
+
+
 def run_backfill():
     session = get_session()
-    token = obter_token(session)
-    headers = {"Authorization": f"Bearer {token}"}
+    token = Token(session)
 
     conn = get_db_conn()
     cur = conn.cursor()
 
-    cur.execute("SELECT sensor_id FROM sensores ORDER BY sensor_id")
+    cur.execute("SELECT sensor_id FROM sensores WHERE tipo_sensor = ANY(%s) "
+                "ORDER BY sensor_id", (list(TIPOS_VALIDOS),))
     sensor_ids = [r[0] for r in cur.fetchall()]
     print(f"📦 {len(sensor_ids)} sensores")
 
-    agora = datetime.now(timezone.utc)
+    fim_geral = (datetime.fromisoformat(DATA_FINAL).replace(tzinfo=timezone.utc)
+                 if DATA_FINAL else datetime.now(timezone.utc))
     total_geral = 0
 
-    for ini, fim in gerar_blocos(DATA_INICIAL, agora):
-        print(f"\n🗓️  {ini.date()} → {fim.date()}")
+    for ini, fim in gerar_blocos(DATA_INICIAL, fim_geral):
+        print(f"\n🗓️ {ini.date()} → {fim.date()}")
 
         for i in range(0, len(sensor_ids), SENSOR_BATCH_SIZE):
             lote = sensor_ids[i:i + SENSOR_BATCH_SIZE]
@@ -58,9 +122,8 @@ def run_backfill():
 
             while True:
                 try:
-                    r = session.get(
+                    dados = token.get_api(
                         f"{BASE_URL}/SensorData",
-                        headers=headers,
                         params={
                             "version": "1.3",
                             "startDate": ini.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -69,12 +132,13 @@ def run_backfill():
                             "limit": PAGE_SIZE,
                             "sensorIds": ",".join(map(str, lote)),
                         },
-                        timeout=REQUEST_TIMEOUT,
                     )
-                    r.raise_for_status()
-                    dados = r.json()
+                except SystemExit:
+                    raise
                 except Exception as e:
-                    print(f"⚠️ Erro no lote {lote[0]}..{lote[-1]}: {e}")
+                    msg = f"lote {lote[0]}..{lote[-1]} em {ini.date()}: {e}"
+                    print(f"⚠️ Erro no {msg}")
+                    erros.append(msg)
                     break
 
                 qtd = len(dados)
@@ -85,10 +149,19 @@ def run_backfill():
                               [(d["sensorId"], d["readingDate"], d["sensorValue"])
                                for d in dados],
                               page_size=500)
+
+                ultimos = {}
+                for d in dados:
+                    sid, ts = d["sensorId"], d["readingDate"]
+                    if sid not in ultimos or ts > ultimos[sid]:
+                        ultimos[sid] = ts
+                for sid, ts in ultimos.items():
+                    cur.execute(SQL_CURSOR, (sid, ts))
+
                 conn.commit()
 
                 total_geral += qtd
-                offset += qtd          # <- antes era "offset += 1"
+                offset += qtd          # antes era "offset += 1"
 
                 if qtd < PAGE_SIZE:
                     break
@@ -98,6 +171,12 @@ def run_backfill():
     cur.close()
     conn.close()
     print(f"\n🏁 Backfill finalizado — {total_geral} leituras")
+
+    if erros:
+        print(f"\n❌ {len(erros)} lote(s) com erro. Primeiros:")
+        for m in erros[:10]:
+            print(f"   - {m}")
+        raise SystemExit(f"❌ Backfill terminou com {len(erros)} erro(s).")
 
 
 if __name__ == "__main__":
