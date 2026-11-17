@@ -2,7 +2,7 @@ name: Ingestão_Orion_(15min)
 
 on:
   schedule:
-    - cron: "*/15 * * * *" 
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -12,6 +12,9 @@ concurrency:
 jobs:
   ingestao_incremental:
     runs-on: ubuntu-latest
+    # A execução levava 18 a 22 min com agendamento de 15 min, então havia
+    # sempre uma na fila. Corta em 14 min para a próxima começar limpa.
+    timeout-minutes: 14
 
     steps:
       - name: Checkout do repositório
@@ -21,6 +24,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Instalar dependências
         run: |
@@ -31,5 +35,4 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           API_KEY: ${{ secrets.API_KEY }}
-        run: |
-          python ingestao/ingest_incremental.py
+        run: python ingestao/ingest_incremental.py

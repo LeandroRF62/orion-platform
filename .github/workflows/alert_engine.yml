@@ -1,13 +1,21 @@
 name: Orion Alert Engine
 
 on:
+  # Era a cada 1 minuto, com o script num laço infinito e sem concurrency:
+  # as execuções se acumulavam às centenas. Agora o script roda uma vez e
+  # encerra, e só uma execução fica de pé por vez.
   schedule:
-    - cron: "*/1 * * * *"   # roda a cada 1 minuto
+    - cron: "*/15 * * * *"
   workflow_dispatch:
+
+concurrency:
+  group: alert-engine
+  cancel-in-progress: false
 
 jobs:
   run-alert-engine:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repo
@@ -17,10 +25,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
-        run: |
-          pip install pandas sqlalchemy psycopg2-binary
+        run: pip install pandas sqlalchemy psycopg2-binary
 
       - name: Run Alert Engine
         env:
@@ -30,5 +38,4 @@ jobs:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-        run: |
-          python alert_engine.py
+        run: python alert_engine.py
