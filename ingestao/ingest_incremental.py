@@ -425,36 +425,48 @@ SQL_CURSOR = """
 """
 
 
-def baixar_lote(cur, conn, lote, inicio, agora):
-    """Pagina um lote de sensores que compartilham a mesma data de início."""
-    sensor_param = ",".join(map(str, lote))
+def _parse_ts(txt):
+    """readingDate da Orion. Tolera 'Z', fração de segundo e offset."""
+    t = str(txt).strip().replace("Z", "+00:00")
+    try:
+        d = datetime.fromisoformat(t)
+    except ValueError:
+        t = t.split(".")[0].split("+")[0]
+        d = datetime.fromisoformat(t)
+    return d.replace(tzinfo=None)
+
+
+def _baixar_janela(cur, conn, sensor_param, rotulo, inicio, fim):
+    """Baixa uma janela, paginando por offset.
+    Devolve (quantidade, maior readingDate recebido, houve_erro)."""
     offset = 0
     total = 0
+    maior = None
 
     while True:
         if tokens.abortar:
-            break
+            return total, maior, True
         try:
             dados = get_api(
                 f"{BASE_URL}/SensorData",
                 params={
                     "version": "1.3",
                     "startDate": inicio,
-                    "endDate": agora,
+                    "endDate": fim,
                     "offset": offset,
                     "limit": PAGE_SIZE,
                     "sensorIds": sensor_param,
                 },
             )
         except Exception as e:
-            msg = f"lote {lote[0]}..{lote[-1]} (offset {offset}): {e}"
+            msg = f"lote {rotulo} (desde {inicio}, offset {offset}): {e}"
             print(f"⚠️ Erro no {msg}")
             registrar_erro(msg)
-            break
+            return total, maior, True
 
         qtd = len(dados)
         if qtd == 0:
-            break
+            return total, maior, False
 
         execute_batch(cur, SQL_LEITURA,
                       [(d["sensorId"], d["readingDate"], d["sensorValue"]) for d in dados],
@@ -466,6 +478,8 @@ def baixar_lote(cur, conn, lote, inicio, agora):
             sid, ts = d["sensorId"], d["readingDate"]
             if sid not in ultimos or ts > ultimos[sid]:
                 ultimos[sid] = ts
+            if maior is None or ts > maior:
+                maior = ts
         for sid, ts in ultimos.items():
             cur.execute(SQL_CURSOR, (sid, ts))
 
@@ -474,7 +488,40 @@ def baixar_lote(cur, conn, lote, inicio, agora):
         offset += qtd          # avança pela quantidade recebida
 
         if qtd < PAGE_SIZE:
+            return total, maior, False
+
+
+# A Orion não devolve o intervalo inteiro de uma vez: mesmo com endDate = agora
+# e offset paginando, a resposta para em poucos dias e vem com menos linhas que
+# o limit, o que parecia "acabaram os dados". Era por isso que um sensor parado
+# em 26/10 andava só até 30/10 por execução e nunca alcançava o presente.
+# Solução: ao terminar uma janela, recomeçar a partir da última leitura recebida
+# e repetir até a Orion não devolver mais nada.
+MAX_JANELAS = 400
+
+
+def baixar_lote(cur, conn, lote, inicio, agora):
+    """Baixa tudo de um lote de sensores, de 'inicio' até 'agora'."""
+    sensor_param = ",".join(map(str, lote))
+    rotulo = f"{lote[0]}..{lote[-1]}"
+    total = 0
+    janela = inicio
+
+    for _ in range(MAX_JANELAS):
+        qtd, maior, erro = _baixar_janela(cur, conn, sensor_param, rotulo, janela, agora)
+        total += qtd
+        if erro or qtd == 0 or maior is None:
             break
+
+        # Recomeça 1 segundo depois da última leitura, para não repetir a mesma
+        # linha e cair num laço parado.
+        try:
+            proxima = (_parse_ts(maior) + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            break
+        if proxima <= janela or proxima >= agora:
+            break
+        janela = proxima
 
     return total
 
