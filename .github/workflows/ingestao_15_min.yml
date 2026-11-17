@@ -35,4 +35,6 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           API_KEY: ${{ secrets.API_KEY }}
-        run: python ingestao/ingest_incremental.py
+        # -u desliga o buffer do stdout: sem isso o log do Actions fica vazio
+        # até o script terminar, e não dá para acompanhar o andamento.
+        run: python -u ingestao/ingest_incremental.py

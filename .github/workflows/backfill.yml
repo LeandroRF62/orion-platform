@@ -43,4 +43,4 @@ jobs:
           API_KEY: ${{ secrets.API_KEY }}
           DATA_INICIAL: ${{ inputs.data_inicial }}
           DATA_FINAL: ${{ inputs.data_final }}
-        run: python ingestao/backfill.py
+        run: python -u ingestao/backfill.py
